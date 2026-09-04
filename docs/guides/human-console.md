@@ -6,6 +6,8 @@ AgentCorp provides first-class Human-in-the-Loop (HITL) oversight designed for d
 
 ## 1. How It Works: Sequence & State Diagrams
 
+![AgentCorp Human-in-the-Loop Coordination Flow](../images/coordination-flow.jpg)
+
 ### A. Inter-Agent Coordination Sequence Diagram
 
 This diagram shows how messages move between agents, how policies are evaluated, and when human oversight is triggered:

@@ -9,6 +9,8 @@ model.
 > Central long-lived broker daemon, terminal-native human console & review loop,
 > real-time SSE event pipeline, dark glassmorphic web dashboard, and audit exports are ready.
 
+![AgentCorp Architecture Blueprint](./docs/images/architecture.jpg)
+
 ## What works today
 
 - Long-lived broker daemon over MCP Streamable HTTP, Admin REST API, and Server-Sent Events (`/api/events`)

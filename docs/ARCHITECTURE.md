@@ -6,6 +6,8 @@ This document details the architectural topology, security boundaries, domain in
 
 ## 1. System Topology & Process Boundaries
 
+![AgentCorp Architecture Blueprint](./images/architecture.jpg)
+
 AgentCorp follows a **single-writer local daemon** model designed to bridge heterogeneous AI clients while enforcing strict role boundaries and transactional data integrity:
 
 ```text
