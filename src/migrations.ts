@@ -116,6 +116,24 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 2,
+    name: "tighten_default_policies",
+    up: (db: DatabaseSync) => {
+      const legacy = db.prepare("SELECT * FROM policies WHERE policy_id = 'allow-read-only-messages' AND message_type IS NULL").get();
+      if (legacy) {
+        db.prepare("DELETE FROM policies WHERE policy_id = 'allow-read-only-messages' AND message_type IS NULL").run();
+        const now = new Date().toISOString();
+        const insert = db.prepare(`
+          INSERT OR IGNORE INTO policies (policy_id, subject, priority, message_type, risk_tags, action, enabled, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        insert.run("gate-critical-proposals", "message", 200, "proposal", null, "require_human", 1, now, now);
+        insert.run("allow-read-only-status-updates", "message", 100, "status_update", JSON.stringify(["read_only"]), "auto_approve", 1, now, now);
+        insert.run("allow-read-only-reports", "message", 100, "report", JSON.stringify(["read_only"]), "auto_approve", 1, now, now);
+      }
+    },
+  },
 ];
 
 export function ensureMigrationTable(db: DatabaseSync): void {

@@ -5,9 +5,9 @@ MCP-capable agents stable roles, typed messages, durable tasks, approval gates,
 and access-controlled artifacts without coupling the agents to one vendor or
 model.
 
-> Status: **developer preview (v0.2 — Milestone 2 Seamless Human Console Complete)**.
+> Status: **developer preview (0.1.0-alpha.1)**.
 > Central long-lived broker daemon, terminal-native human console & review loop,
-> real-time SSE event pipeline, dark glassmorphic web dashboard, and audit exports are ready.
+> real-time SSE event pipeline with 15s keep-alive heartbeat, dark glassmorphic web dashboard, and audit exports.
 
 ![AgentCorp Architecture Blueprint](./docs/images/architecture.jpg)
 
@@ -165,11 +165,9 @@ The delivery sequence and design gaps are tracked in
 
 ## Security model
 
-AgentCorp v0.1 enforces identity, routing, policy, and artifact checks inside
-its MCP/CLI boundary. It does not sandbox an underlying agent's general shell
-or filesystem access. Keep the SQLite file and administrative CLI unavailable
-to untrusted processes. A separate authenticated broker daemon is planned for
-v0.2 to create a stronger process boundary.
+AgentCorp 0.1.0-alpha.1 enforces caller identity, communication routing, policy gating, and artifact access control through its central authenticated daemon over MCP Streamable HTTP and role-bound stdio adapters using header-only bearer tokens.
+
+As a local developer preview, AgentCorp does not sandbox an underlying agent's general shell or filesystem access. Keep `.agentcorp/credentials.json`, `.agentcorp/agentcorp.db`, and the administrative CLI unavailable to untrusted processes. Role capabilities are currently descriptive metadata, and host-agent capability sandboxing is scheduled for Milestone 4.
 
 See [SECURITY.md](./SECURITY.md) for reporting and deployment guidance.
 

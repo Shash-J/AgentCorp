@@ -109,6 +109,7 @@ export class AgentCorpServer {
   private readonly roleHandlers = new Map<string, ReturnType<typeof createMcpHandler>>();
   private readonly sseClients = new Set<ServerResponse>();
   private readonly eventListener = (event: BrokerDomainEvent) => this.broadcastSse(event);
+  private sseHeartbeatInterval: NodeJS.Timeout | null = null;
   private port = 0;
   private host = "127.0.0.1";
   private startedAt: string | null = null;
@@ -173,6 +174,18 @@ export class AgentCorpServer {
     this.server = server;
     this.startedAt = new Date().toISOString();
 
+    // 15-second SSE keep-alive heartbeat comment (:keep-alive\n\n)
+    this.sseHeartbeatInterval = setInterval(() => {
+      for (const client of this.sseClients) {
+        try {
+          client.write(":keep-alive\n\n");
+        } catch {
+          this.sseClients.delete(client);
+        }
+      }
+    }, 15000);
+    this.sseHeartbeatInterval.unref();
+
     const daemonInfo: DaemonInfo = {
       pid: process.pid,
       port: this.port,
@@ -191,6 +204,11 @@ export class AgentCorpServer {
   }
 
   async stop(): Promise<void> {
+    if (this.sseHeartbeatInterval) {
+      clearInterval(this.sseHeartbeatInterval);
+      this.sseHeartbeatInterval = null;
+    }
+
     if (this.auditOnShutdown) {
       try {
         exportAuditTrail(this.broker);
@@ -246,7 +264,7 @@ export class AgentCorpServer {
   private async handleHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       const url = new URL(req.url ?? "/", `http://${req.headers.host ?? `${this.host}:${this.port}`}`);
-      const token = this.extractToken(req, url);
+      const token = this.extractToken(req);
 
       // CORS headers for browser console compatibility
       res.setHeader("Access-Control-Allow-Origin", "*");
@@ -444,12 +462,12 @@ export class AgentCorpServer {
     this.sendJson(res, 404, { error: "NOT_FOUND", message: `Unknown admin API endpoint: ${path}` });
   }
 
-  private extractToken(req: IncomingMessage, url: URL): string | undefined {
+  private extractToken(req: IncomingMessage): string | undefined {
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith("Bearer ")) {
       return authHeader.slice(7).trim();
     }
-    return url.searchParams.get("token") ?? undefined;
+    return undefined;
   }
 
   private async readJsonBody<T>(req: IncomingMessage): Promise<T> {

@@ -1,18 +1,18 @@
 # Security policy
 
-AgentCorp is a developer preview and has not yet received an independent
-security audit. Do not use v0.1 as a hostile multi-tenant security boundary.
+AgentCorp is a developer preview (0.1.0-alpha.1) and has not yet received an independent
+security audit. Do not use as a hostile multi-tenant security boundary.
 
 ## Supported versions
 
-Only the latest published minor version receives security fixes before 1.0.
+Only the latest published preview version receives security fixes before 1.0.
 
 ## Reporting a vulnerability
 
-Please report vulnerabilities privately through GitHub Security Advisories on
-the future canonical repository. Do not open a public issue containing exploit
-details. Include affected versions, reproduction steps, impact, and any known
-mitigation.
+Please report vulnerabilities privately through GitHub Security Advisories at
+[https://github.com/agentcorp/agentcorp/security/advisories](https://github.com/agentcorp/agentcorp/security/advisories).
+Do not open a public issue containing exploit details. Include affected versions,
+reproduction steps, impact, and any known mitigation.
 
 ## Deployment guidance
 

@@ -80,15 +80,48 @@ describe("AgentCorpServer", () => {
     expect(res.status).toBe(401);
   });
 
+  it("rejects query string tokens on Admin API endpoints with 401 (AC-003)", async () => {
+    const res = await fetch(`${server.getUrl()}/api/approvals?token=${creds.adminToken}`);
+    expect(res.status).toBe(401);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe("UNAUTHORIZED");
+  });
+
+  it("rejects query string tokens on MCP endpoint with 401 (AC-003)", async () => {
+    const res = await fetch(`${server.getUrl()}/mcp?token=${creds.roleTokens.architect}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "initialize", id: 1 }),
+    });
+    expect(res.status).toBe(401);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe("UNAUTHORIZED");
+  });
+
+  it("accepts valid Authorization Bearer headers on Admin API (AC-003)", async () => {
+    const res = await fetch(`${server.getUrl()}/api/approvals`, {
+      headers: { Authorization: `Bearer ${creds.adminToken}` },
+    });
+    expect(res.status).toBe(200);
+  });
+
   it("exchanges approved message between two agents over Streamable HTTP and Admin API", async () => {
-    const archUrl = new URL(`${server.getUrl()}/mcp`);
-    archUrl.searchParams.set("token", creds.roleTokens.architect);
-
-    const devUrl = new URL(`${server.getUrl()}/mcp`);
-    devUrl.searchParams.set("token", creds.roleTokens.developer);
-
-    const archTransport = new StreamableHTTPClientTransport(archUrl);
-    const devTransport = new StreamableHTTPClientTransport(devUrl);
+    const archTransport = new StreamableHTTPClientTransport(
+      new URL(`${server.getUrl()}/mcp`),
+      {
+        requestInit: {
+          headers: { Authorization: `Bearer ${creds.roleTokens.architect}` },
+        },
+      },
+    );
+    const devTransport = new StreamableHTTPClientTransport(
+      new URL(`${server.getUrl()}/mcp`),
+      {
+        requestInit: {
+          headers: { Authorization: `Bearer ${creds.roleTokens.developer}` },
+        },
+      },
+    );
 
     const archClient = new Client({ name: "arch-client", version: "1.0.0" });
     const devClient = new Client({ name: "dev-client", version: "1.0.0" });

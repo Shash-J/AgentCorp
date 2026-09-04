@@ -72,11 +72,22 @@ describe("Console Server & SSE", () => {
     expect(jsRes.headers.get("content-type")).toContain("application/javascript");
   });
 
-  it("streams real-time events over SSE", async () => {
+  it("rejects query string tokens on SSE /api/events endpoint with 401 (AC-003)", async () => {
     const sseUrl = `${server.getUrl()}/api/events?token=${creds.adminToken}`;
+    const res = await fetch(sseUrl);
+    expect(res.status).toBe(401);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe("UNAUTHORIZED");
+  });
+
+  it("streams real-time events over SSE with Authorization Bearer header", async () => {
+    const sseUrl = `${server.getUrl()}/api/events`;
     const controller = new AbortController();
 
-    const response = await fetch(sseUrl, { signal: controller.signal });
+    const response = await fetch(sseUrl, {
+      headers: { Authorization: `Bearer ${creds.adminToken}` },
+      signal: controller.signal,
+    });
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
 
@@ -100,6 +111,14 @@ describe("Console Server & SSE", () => {
     expect(secondText).toContain("SSE Verified Task");
 
     controller.abort();
+  });
+
+  it("verifies web console client script contains zero persistent localStorage usage (AC-003)", async () => {
+    const jsRes = await fetch(`${server.getUrl()}/console.js`);
+    expect(jsRes.status).toBe(200);
+    const jsContent = await jsRes.text();
+    expect(jsContent).not.toContain("localStorage");
+    expect(jsContent).toContain("sessionStorage");
   });
 
   it("exposes artifacts REST endpoints for console inspection", async () => {

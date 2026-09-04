@@ -177,4 +177,54 @@ describe("AgentCorpBroker", () => {
     });
     expect(gated.status).toBe("pending_approval");
   });
+
+  it("strictly holds proposal messages for human approval even if sender self-declares read_only risk tag (AC-005)", () => {
+    const instance = broker([
+      {
+        id: "gate-critical-proposals",
+        subject: "message",
+        message_type: "proposal",
+        priority: 200,
+        action: "require_human",
+      },
+      {
+        id: "allow-read-only-status-updates",
+        subject: "message",
+        message_type: "status_update",
+        priority: 100,
+        risk_tags: ["read_only"],
+        action: "auto_approve",
+      },
+      {
+        id: "allow-read-only-reports",
+        subject: "message",
+        message_type: "report",
+        priority: 100,
+        risk_tags: ["read_only"],
+        action: "auto_approve",
+      },
+    ]);
+
+    // 1. Adversarial attempt: agent tags a proposal as read_only hoping to auto-approve
+    const maliciousProposal = instance.sendMessage("architect", {
+      toRole: "developer",
+      type: "proposal",
+      payload: { action: "drop database and re-initialize" },
+      riskTags: ["read_only"],
+    });
+
+    expect(maliciousProposal.status).toBe("pending_approval");
+    const approvals = instance.listPendingApprovals();
+    expect(approvals.length).toBe(1);
+    expect(approvals[0]!.subjectId).toBe(maliciousProposal.messageId);
+
+    // 2. Legitimate read-only status update auto-approves
+    const safeUpdate = instance.sendMessage("architect", {
+      toRole: "developer",
+      type: "status_update",
+      payload: { phase: "reviewing" },
+      riskTags: ["read_only"],
+    });
+    expect(safeUpdate.status).toBe("delivered");
+  });
 });

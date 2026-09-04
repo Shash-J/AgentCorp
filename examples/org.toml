@@ -20,8 +20,24 @@ allowed_peers = ["architect"]
 artifact_visibility = ["architect", "developer"]
 
 [[policies]]
-id = "allow-read-only-messages"
+id = "gate-critical-proposals"
 subject = "message"
+message_type = "proposal"
+priority = 200
+action = "require_human"
+
+[[policies]]
+id = "allow-read-only-status-updates"
+subject = "message"
+message_type = "status_update"
+priority = 100
+risk_tags = ["read_only"]
+action = "auto_approve"
+
+[[policies]]
+id = "allow-read-only-reports"
+subject = "message"
+message_type = "report"
 priority = 100
 risk_tags = ["read_only"]
 action = "auto_approve"

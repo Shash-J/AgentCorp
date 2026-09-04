@@ -14,14 +14,14 @@ describe("migrations", () => {
     try {
       expect(getCurrentSchemaVersion(rawDb)).toBe(0);
       const result = runMigrations(rawDb);
-      expect(result.applied).toEqual([1]);
-      expect(result.currentVersion).toBe(1);
-      expect(getCurrentSchemaVersion(rawDb)).toBe(1);
+      expect(result.applied).toEqual([1, 2]);
+      expect(result.currentVersion).toBe(2);
+      expect(getCurrentSchemaVersion(rawDb)).toBe(2);
 
       // Re-running migrations is idempotent
       const rerun = runMigrations(rawDb);
       expect(rerun.applied).toEqual([]);
-      expect(rerun.currentVersion).toBe(1);
+      expect(rerun.currentVersion).toBe(2);
     } finally {
       rawDb.close();
     }
@@ -44,7 +44,7 @@ describe("migrations", () => {
   it("initializes schema properly via AgentCorpDatabase", () => {
     const db = new AgentCorpDatabase(":memory:");
     try {
-      expect(db.getSchemaVersion()).toBe(1);
+      expect(db.getSchemaVersion()).toBe(2);
       expect(db.listAllTasks()).toEqual([]);
       expect(db.listAllMessages()).toEqual([]);
       expect(db.listAllApprovals()).toEqual([]);
@@ -67,11 +67,45 @@ describe("migrations", () => {
 
       // Run migrations; ensureMigrationTable must detect missing name column and alter it safely
       const result = runMigrations(rawDb);
-      expect(result.applied).toEqual([1]);
-      expect(result.currentVersion).toBe(1);
+      expect(result.applied).toEqual([1, 2]);
+      expect(result.currentVersion).toBe(2);
 
       const cols = rawDb.prepare("PRAGMA table_info(schema_migrations)").all() as Array<{ name: string }>;
       expect(cols.some((c) => c.name === "name")).toBe(true);
+    } finally {
+      rawDb.close();
+    }
+  });
+
+  it("migration 2 tightens default policies and replaces legacy untyped rule (AC-005)", () => {
+    const rawDb = new DatabaseSync(":memory:");
+    try {
+      // Run migration 1
+      MIGRATIONS[0]!.up(rawDb);
+      // Seed legacy untyped rule
+      rawDb.prepare(`
+        INSERT INTO policies (policy_id, subject, priority, action, enabled, created_at, updated_at)
+        VALUES ('allow-read-only-messages', 'message', 100, 'auto_approve', 1, '2026-09-04T00:00:00Z', '2026-09-04T00:00:00Z')
+      `).run();
+
+      // Run migration 2
+      MIGRATIONS[1]!.up(rawDb);
+
+      const policies = rawDb.prepare("SELECT policy_id, message_type, priority, action FROM policies").all() as Array<{
+        policy_id: string;
+        message_type: string | null;
+        priority: number;
+        action: string;
+      }>;
+
+      // Legacy untyped rule is deleted
+      expect(policies.some((p) => p.policy_id === "allow-read-only-messages")).toBe(false);
+      // Gating rule exists
+      const proposalRule = policies.find((p) => p.policy_id === "gate-critical-proposals");
+      expect(proposalRule).toBeDefined();
+      expect(proposalRule?.action).toBe("require_human");
+      expect(proposalRule?.priority).toBe(200);
+      expect(proposalRule?.message_type).toBe("proposal");
     } finally {
       rawDb.close();
     }

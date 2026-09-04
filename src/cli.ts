@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -38,8 +39,24 @@ artifact_visibility = ["architect", "developer"]
 
 # Higher priority rules win. If no rule matches, human approval is required.
 [[policies]]
-id = "allow-read-only-messages"
+id = "gate-critical-proposals"
 subject = "message"
+message_type = "proposal"
+priority = 200
+action = "require_human"
+
+[[policies]]
+id = "allow-read-only-status-updates"
+subject = "message"
+message_type = "status_update"
+priority = 100
+risk_tags = ["read_only"]
+action = "auto_approve"
+
+[[policies]]
+id = "allow-read-only-reports"
+subject = "message"
+message_type = "report"
 priority = 100
 risk_tags = ["read_only"]
 action = "auto_approve"
@@ -177,7 +194,7 @@ async function getTui(options: GlobalOptions): Promise<{ tui: AgentCorpTui; clos
 const program = new Command()
   .name("agentcorp")
   .description("Coordinate role-based AI agent teams over MCP")
-  .version("0.1.0")
+  .version("0.1.0-alpha.1")
   .option("--config <path>", "organization configuration", "org.toml")
   .option("--db <path>", "SQLite broker database", ".agentcorp/agentcorp.db");
 

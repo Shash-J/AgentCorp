@@ -50,8 +50,22 @@ describe("AgentCorp MCP server", () => {
 
     try {
       const tools = await architectClient.listTools();
-      expect(tools.tools.map((tool) => tool.name)).toContain("send_message");
-      expect(tools.tools.map((tool) => tool.name)).toContain("get_artifact");
+      const toolNames = tools.tools.map((tool) => tool.name);
+      expect(toolNames).toHaveLength(12);
+      expect(toolNames).toEqual(expect.arrayContaining([
+        "register_role",
+        "whoami",
+        "create_task",
+        "list_tasks",
+        "update_task_status",
+        "send_message",
+        "get_inbox",
+        "acknowledge_message",
+        "get_thread",
+        "create_artifact",
+        "list_artifacts",
+        "get_artifact",
+      ]));
 
       const sent = await architectClient.callTool({
         name: "send_message",

@@ -1,7 +1,8 @@
 // AgentCorp Human Approval & Coordination Console Logic
 (function () {
   let adminToken = "";
-  let sseSource = null;
+  let sseAbortController = null;
+  let sseReconnectTimer = null;
   let activeTab = "approvals";
   let activeRole = "";
   let selectedTaskId = null;
@@ -28,11 +29,17 @@
     const urlToken = params.get("token");
     if (urlToken) {
       adminToken = urlToken;
-      localStorage.setItem("agentcorp_admin_token", urlToken);
+      try {
+        sessionStorage.setItem("agentcorp_admin_token", urlToken);
+      } catch {}
       // Remove sensitive token from URL to prevent leakage via browser history and Referer headers
       window.history.replaceState({}, document.title, window.location.pathname);
     } else {
-      adminToken = localStorage.getItem("agentcorp_admin_token") || "";
+      try {
+        adminToken = sessionStorage.getItem("agentcorp_admin_token") || "";
+      } catch {
+        adminToken = "";
+      }
     }
     updateAuthLabel();
   }
@@ -51,11 +58,15 @@
     };
   }
 
-  // SSE Connection
-  function connectSse() {
-    if (sseSource) {
-      sseSource.close();
-      sseSource = null;
+  // SSE Connection via Authenticated Fetch Stream (zero URL credentials)
+  async function connectSse() {
+    if (sseAbortController) {
+      sseAbortController.abort();
+      sseAbortController = null;
+    }
+    if (sseReconnectTimer) {
+      clearTimeout(sseReconnectTimer);
+      sseReconnectTimer = null;
     }
 
     const indicator = document.getElementById("sse-indicator");
@@ -67,43 +78,63 @@
       return;
     }
 
+    sseAbortController = new AbortController();
+    const signal = sseAbortController.signal;
+
     try {
-      sseSource = new EventSource(`/api/events?token=${encodeURIComponent(adminToken)}`);
+      if (statusText) statusText.textContent = "Connecting...";
+      const res = await fetch("/api/events", {
+        headers: { Authorization: `Bearer ${adminToken}` },
+        signal,
+      });
 
-      sseSource.onopen = () => {
-        if (indicator) indicator.className = "status-dot connected";
-        if (statusText) statusText.textContent = "Live SSE Connected";
-      };
-
-      sseSource.onmessage = (e) => {
-        try {
-          const data = JSON.parse(e.data);
-          handleBrokerEvent(data);
-        } catch {}
-      };
-
-      // Listen for custom broker domain events
-      const eventTypes = [
-        "message_created", "message_status_changed", "task_created",
-        "task_status_changed", "approval_created", "approval_resolved",
-        "policy_saved", "policy_toggled", "artifact_created", "role_registered"
-      ];
-      for (const t of eventTypes) {
-        sseSource.addEventListener(t, (e) => {
-          try {
-            const parsed = JSON.parse(e.data);
-            handleBrokerEvent(parsed);
-          } catch {}
-        });
+      if (!res.ok || !res.body) {
+        throw new Error(`SSE connection failed: HTTP ${res.status}`);
       }
 
-      sseSource.onerror = () => {
-        if (indicator) indicator.className = "status-dot disconnected";
-        if (statusText) statusText.textContent = "Reconnecting...";
-      };
-    } catch {
+      if (indicator) indicator.className = "status-dot connected";
+      if (statusText) statusText.textContent = "Live SSE Connected";
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() || "";
+
+        for (const block of parts) {
+          if (!block.trim()) continue;
+          let eventType = "message";
+          let dataText = "";
+          for (const line of block.split("\n")) {
+            if (line.startsWith(":")) {
+              // Ignore keep-alive heartbeat comments
+              continue;
+            }
+            if (line.startsWith("event:")) {
+              eventType = line.slice(6).trim();
+            } else if (line.startsWith("data:")) {
+              dataText = line.slice(5).trim();
+            }
+          }
+          if (dataText) {
+            try {
+              const data = JSON.parse(dataText);
+              handleBrokerEvent(data);
+            } catch {}
+          }
+        }
+      }
+    } catch (err) {
+      if (signal.aborted) return;
       if (indicator) indicator.className = "status-dot disconnected";
-      if (statusText) statusText.textContent = "SSE Error";
+      if (statusText) statusText.textContent = "Reconnecting...";
+      sseReconnectTimer = setTimeout(connectSse, 3000);
     }
   }
 
@@ -638,7 +669,9 @@
     document.getElementById("auth-cancel-btn")?.addEventListener("click", () => (authModal.style.display = "none"));
     document.getElementById("auth-save-btn")?.addEventListener("click", () => {
       adminToken = document.getElementById("admin-token-input").value.trim();
-      localStorage.setItem("agentcorp_admin_token", adminToken);
+      try {
+        sessionStorage.setItem("agentcorp_admin_token", adminToken);
+      } catch {}
       updateAuthLabel();
       authModal.style.display = "none";
       loadAllData();

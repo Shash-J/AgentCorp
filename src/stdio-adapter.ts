@@ -112,7 +112,13 @@ export async function createStdioProxy(options: StdioAdapterOptions): Promise<{
     daemonUrl = daemonInfo.url;
   }
 
-  const transport = new StreamableHTTPClientTransport(new URL(`${daemonUrl}/mcp?token=${roleToken}`));
+  const transport = new StreamableHTTPClientTransport(new URL(`${daemonUrl}/mcp`), {
+    requestInit: {
+      headers: {
+        Authorization: `Bearer ${roleToken}`,
+      },
+    },
+  });
   const daemonClient = new Client({
     name: `agentcorp-proxy-${options.role}`,
     version: "0.1.0",

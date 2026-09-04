@@ -1,5 +1,5 @@
 {
-  "exportedAt": "2026-09-04T19:59:53.534Z",
+  "exportedAt": "2026-09-04T21:06:00.699Z",
   "company": "My Agent Company",
   "roles": [
     {
@@ -113,12 +113,12 @@
         "art_809083a9-f96f-40fd-b98a-0a4ba8d6b2c4"
       ],
       "inReplyTo": "msg_c77e1183-552c-44e0-9194-7f1d1066b099",
-      "status": "delivered",
+      "status": "acknowledged",
       "riskTags": [
         "read_only"
       ],
       "createdAt": "2026-09-04T19:57:37.669Z",
-      "resolvedAt": "2026-09-04T19:57:37.669Z"
+      "resolvedAt": "2026-09-04T20:45:09.311Z"
     },
     {
       "messageId": "msg_d89dd53d-dcfb-40e9-886e-2472ccc7aec6",
@@ -136,10 +136,64 @@
         "art_809083a9-f96f-40fd-b98a-0a4ba8d6b2c4"
       ],
       "inReplyTo": null,
-      "status": "pending_approval",
+      "status": "acknowledged",
       "riskTags": [],
       "createdAt": "2026-09-04T19:57:37.687Z",
-      "resolvedAt": null
+      "resolvedAt": "2026-09-04T20:34:27.586Z"
+    },
+    {
+      "messageId": "msg_bf40f857-d895-450d-890b-c454275cd9e4",
+      "taskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
+      "fromRole": "architect",
+      "toRole": "developer",
+      "type": "verdict",
+      "payload": {
+        "verdict": "no_go_public_release",
+        "summary": "AC-001, AC-002 and AC-004 verify; AC-003 remains open. Additional release blockers: policy bypass via self-declared read_only, missing CLI shebang, and inconsistent/unprepared release identity/docs/CI.",
+        "required_blockers": [
+          "AC-003",
+          "AC-005",
+          "AC-006",
+          "AC-007"
+        ],
+        "artifact_id": "art_800eb174-8fc0-4917-b441-472e8b00504d"
+      },
+      "references": [
+        "art_800eb174-8fc0-4917-b441-472e8b00504d"
+      ],
+      "inReplyTo": "msg_50d5d8c4-b06a-4a55-9d65-2fd7d25d8fe8",
+      "status": "acknowledged",
+      "riskTags": [
+        "read_only"
+      ],
+      "createdAt": "2026-09-04T20:48:29.767Z",
+      "resolvedAt": "2026-09-04T21:05:51.022Z"
+    },
+    {
+      "messageId": "msg_61da9990-2433-4164-9966-bcc506173613",
+      "taskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
+      "fromRole": "developer",
+      "toRole": "architect",
+      "type": "report",
+      "payload": {
+        "verdict": "blockers_resolved",
+        "summary": "All four release blockers (AC-003, AC-005, AC-006, AC-007) have been resolved, verified with 38 tests, and confirmed via clean-environment packed tarball install.",
+        "version": "0.1.0-alpha.1",
+        "artifact_id": "art_167d7129-88ac-4eac-b707-7a3990519b48",
+        "clean_environment_smoke_test": "passed",
+        "tarball": "agentcorp-broker-0.1.0-alpha.1.tgz",
+        "status": "ready_for_alpha_release"
+      },
+      "references": [
+        "art_167d7129-88ac-4eac-b707-7a3990519b48"
+      ],
+      "inReplyTo": "msg_bf40f857-d895-450d-890b-c454275cd9e4",
+      "status": "delivered",
+      "riskTags": [
+        "read_only"
+      ],
+      "createdAt": "2026-09-04T21:05:51.051Z",
+      "resolvedAt": "2026-09-04T21:05:51.051Z"
     }
   ],
   "approvals": [
@@ -148,7 +202,7 @@
       "subject": "message",
       "subjectId": "msg_d89dd53d-dcfb-40e9-886e-2472ccc7aec6",
       "requestedBy": "developer",
-      "status": "pending",
+      "status": "approved",
       "context": {
         "fromRole": "developer",
         "toRole": "architect",
@@ -167,8 +221,8 @@
         "matchedRuleId": null
       },
       "createdAt": "2026-09-04T19:57:37.687Z",
-      "decidedAt": null,
-      "decisionNote": null
+      "decidedAt": "2026-09-04T20:33:15.818Z",
+      "decisionNote": "this is testing the first human-in-loop."
     }
   ],
   "artifacts": [
@@ -197,6 +251,32 @@
       ],
       "relatedTaskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
       "createdAt": "2026-09-04T19:57:37.638Z"
+    },
+    {
+      "artifactId": "art_800eb174-8fc0-4917-b441-472e8b00504d",
+      "type": "review",
+      "name": "agentcorp-architect-release-verdict-2026-09-05.md",
+      "producedBy": "architect",
+      "contentHash": "34b525984d986339f990bdbaa69b079be6c443033e2ba0c18e46a912750e0cc7",
+      "visibleToRoles": [
+        "architect",
+        "developer"
+      ],
+      "relatedTaskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
+      "createdAt": "2026-09-04T20:48:29.743Z"
+    },
+    {
+      "artifactId": "art_167d7129-88ac-4eac-b707-7a3990519b48",
+      "type": "resolution",
+      "name": "agentcorp-developer-verdict-resolution-2026-09-05.md",
+      "producedBy": "developer",
+      "contentHash": "e8b584d05a67d46a767c61e1ab94e92a89b7b8ab28dc333c1ac2dbb265a6d14e",
+      "visibleToRoles": [
+        "architect",
+        "developer"
+      ],
+      "relatedTaskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
+      "createdAt": "2026-09-04T21:05:51.036Z"
     }
   ]
 }
