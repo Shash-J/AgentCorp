@@ -1,5 +1,5 @@
 {
-  "exportedAt": "2026-09-04T19:52:52.376Z",
+  "exportedAt": "2026-09-04T19:59:53.534Z",
   "company": "My Agent Company",
   "roles": [
     {
@@ -90,15 +90,87 @@
         "art_f5afa86e-d3b2-4bb4-bc85-b503d771db3f"
       ],
       "inReplyTo": "msg_6cd715f7-df10-43ae-a90e-51f9e5d6f0d3",
-      "status": "delivered",
+      "status": "acknowledged",
       "riskTags": [
         "read_only"
       ],
       "createdAt": "2026-09-04T19:40:51.214Z",
-      "resolvedAt": "2026-09-04T19:40:51.214Z"
+      "resolvedAt": "2026-09-04T19:57:37.617Z"
+    },
+    {
+      "messageId": "msg_50d5d8c4-b06a-4a55-9d65-2fd7d25d8fe8",
+      "taskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
+      "fromRole": "developer",
+      "toRole": "architect",
+      "type": "status_update",
+      "payload": {
+        "verdict": "blockers_resolved",
+        "summary": "All four release blockers (AC-001 through AC-004) have been resolved and verified with 31/31 unit and negative-path tests.",
+        "artifact_id": "art_809083a9-f96f-40fd-b98a-0a4ba8d6b2c4",
+        "next_step": "Requesting human approval to finalize release candidate."
+      },
+      "references": [
+        "art_809083a9-f96f-40fd-b98a-0a4ba8d6b2c4"
+      ],
+      "inReplyTo": "msg_c77e1183-552c-44e0-9194-7f1d1066b099",
+      "status": "delivered",
+      "riskTags": [
+        "read_only"
+      ],
+      "createdAt": "2026-09-04T19:57:37.669Z",
+      "resolvedAt": "2026-09-04T19:57:37.669Z"
+    },
+    {
+      "messageId": "msg_d89dd53d-dcfb-40e9-886e-2472ccc7aec6",
+      "taskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
+      "fromRole": "developer",
+      "toRole": "architect",
+      "type": "proposal",
+      "payload": {
+        "action": "prepare_release_candidate",
+        "version": "0.1.0",
+        "proposal": "Merge resolution of AC-001..AC-004 into main branch and tag v0.1.0-rc1.",
+        "git_branch": "main"
+      },
+      "references": [
+        "art_809083a9-f96f-40fd-b98a-0a4ba8d6b2c4"
+      ],
+      "inReplyTo": null,
+      "status": "pending_approval",
+      "riskTags": [],
+      "createdAt": "2026-09-04T19:57:37.687Z",
+      "resolvedAt": null
     }
   ],
-  "approvals": [],
+  "approvals": [
+    {
+      "approvalId": "apr_f03798e7-1f09-4dfa-a9b1-366fc60db7d2",
+      "subject": "message",
+      "subjectId": "msg_d89dd53d-dcfb-40e9-886e-2472ccc7aec6",
+      "requestedBy": "developer",
+      "status": "pending",
+      "context": {
+        "fromRole": "developer",
+        "toRole": "architect",
+        "type": "proposal",
+        "payload": {
+          "action": "prepare_release_candidate",
+          "version": "0.1.0",
+          "proposal": "Merge resolution of AC-001..AC-004 into main branch and tag v0.1.0-rc1.",
+          "git_branch": "main"
+        },
+        "taskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
+        "references": [
+          "art_809083a9-f96f-40fd-b98a-0a4ba8d6b2c4"
+        ],
+        "riskTags": [],
+        "matchedRuleId": null
+      },
+      "createdAt": "2026-09-04T19:57:37.687Z",
+      "decidedAt": null,
+      "decisionNote": null
+    }
+  ],
   "artifacts": [
     {
       "artifactId": "art_f5afa86e-d3b2-4bb4-bc85-b503d771db3f",
@@ -112,6 +184,19 @@
       ],
       "relatedTaskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
       "createdAt": "2026-09-04T19:40:43.220Z"
+    },
+    {
+      "artifactId": "art_809083a9-f96f-40fd-b98a-0a4ba8d6b2c4",
+      "type": "resolution",
+      "name": "agentcorp-developer-resolution-2026-09-05.md",
+      "producedBy": "developer",
+      "contentHash": "04d760bbb50c01ee8b96ed6884262008c935b1f577367827073f70329b4f971b",
+      "visibleToRoles": [
+        "architect",
+        "developer"
+      ],
+      "relatedTaskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
+      "createdAt": "2026-09-04T19:57:37.638Z"
     }
   ]
 }
