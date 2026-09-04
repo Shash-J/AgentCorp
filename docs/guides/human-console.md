@@ -23,9 +23,9 @@ sequenceDiagram
     actor Gemini as Antigravity (Developer)
 
     Note over Codex, Gemini: Case 1: Auto-Approved Message (e.g. read_only report)
-    Codex->>Stdio: send_message(to="developer", type="review", risk_tags=["read_only"])
+    Codex->>Stdio: send_message(to="developer", type="report", risk_tags=["read_only"])
     Stdio->>Daemon: HTTP POST /mcp (Bearer Token: architect)
-    Daemon->>Policy: Evaluate policies for "review" + ["read_only"]
+    Daemon->>Policy: Evaluate policies for "report" + ["read_only"]
     Policy-->>Daemon: MATCH: "allow-read-only-reports" -> action="auto_approve"
     Daemon->>Daemon: Store in messages (status="delivered")
     Daemon-->>Gemini: Delivered to Inbox (No human approval needed!)
@@ -46,8 +46,10 @@ sequenceDiagram
     Daemon-->>Human: Displays pending approval & payload preview
     Human->>Daemon: Press [a] Approve (or [e] Edit & Approve, [r] Reject)
     Daemon->>Daemon: Update approval (status="approved"), message (status="delivered")
-    Daemon-->>Gemini: Delivered to Inbox!
-    Gemini->>Daemon: acknowledge_message("msg_...")
+    Daemon->>Daemon: Activate linked task as assigned
+    Daemon-->>Gemini: Approved handoff appears in get_work_queue
+    Gemini->>Daemon: accept_handoff("msg_...")
+    Daemon->>Daemon: Acknowledge proposal and start task
 ```
 
 ---
@@ -83,8 +85,8 @@ stateDiagram-v2
 ```mermaid
 stateDiagram-v2
     [*] --> proposed: create_task()
-    proposed --> assigned: Assignee designated
-    assigned --> in_progress: Agent starts work (auto-approved)
+    proposed --> assigned: Linked proposal approved
+    assigned --> in_progress: Agent calls accept_handoff
     in_progress --> blocked: Agent encounters dependency
     blocked --> in_progress: Dependency resolved
     

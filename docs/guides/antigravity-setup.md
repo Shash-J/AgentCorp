@@ -7,8 +7,8 @@ This guide walks you through configuring **Google Antigravity IDE** (the Gemini-
 ## 1. Overview
 
 Google Antigravity is an AI-first IDE equipped with agentic capabilities that natively support the Model Context Protocol (MCP). By registering AgentCorp in Antigravity's configuration, the Antigravity agent can:
-- Inspect assigned tasks from the planner (`list_tasks`).
-- Read incoming messages and design proposals (`get_inbox`).
+- Inspect unread messages, assigned tasks, and the next recommended action in one call (`get_work_queue`).
+- Accept an approved proposal and start its task atomically from the agent's perspective (`accept_handoff`).
 - Send implementation diffs, status updates, and test results (`send_message`).
 - Publish versioned, access-controlled code artifacts (`create_artifact`).
 
@@ -56,10 +56,12 @@ Add the `agentcorp` server entry to the `mcpServers` object, binding it to the `
 
 1. **Auto-Spawning**: When Antigravity initializes, the stdio adapter checks if the AgentCorp daemon is active. If not, it automatically spawns the central daemon in the background.
 2. **Identity Lockdown**: The adapter automatically loads the `developer` bearer token from `.agentcorp/credentials.json`. Antigravity's agent identity is cryptographically enforced and cannot be spoofed.
-3. **Tool Injection**: Antigravity automatically registers the 10 AgentCorp tools:
+3. **Tool Injection**: Antigravity automatically registers the 14 AgentCorp tools, including:
    - `whoami`
    - `list_tasks`
    - `get_inbox`
+   - `get_work_queue`
+   - `accept_handoff`
    - `send_message`
    - `create_artifact`
    - etc.
@@ -70,6 +72,14 @@ Add the `agentcorp` server entry to the `mcpServers` object, binding it to the `
 
 Once configured, you can prompt the Antigravity agent in the sidebar chat:
 
-> *"Check your AgentCorp inbox for any proposals from Codex, acknowledge any pending messages, and update your task status to in_progress."*
+> *"Call `get_work_queue` and follow the highest-priority applicable next action. Use `accept_handoff` for an approved task proposal."*
 
-The agent will invoke `whoami` to verify identity, call `get_inbox` to read messages, and execute its tasks within the boundaries configured in `org.toml`.
+The agent can now discover and accept a handoff with two coordination calls instead of separately reading the inbox, listing tasks, acknowledging the proposal, and updating task status.
+
+Add the example prompt as a standing agent instruction so it runs at session
+start. AgentCorp cannot wake an idle Antigravity model by itself; that requires
+host support or a future notification adapter.
+
+After upgrading AgentCorp or changing authentication settings, rebuild the
+package, restart the daemon, and restart the IDE's MCP connection. Existing
+stdio processes continue running their previously loaded adapter code.

@@ -21,6 +21,9 @@ model.
 - Per-role and admin credentials stored securely in `.agentcorp/credentials.json`
 - Role-bound MCP connections with connection-enforced caller identity
 - Typed messages with durable status history
+- Approval-bound task handoffs: intended assignees cannot see or start proposed work before approval
+- Prioritized per-role work queues with executable next-action suggestions
+- Idempotent handoff acceptance that acknowledges and starts approved work in one call
 - Safe-by-default approval policy evaluation
 - Human approve, edit-and-approve, and reject commands with full audit logging
 - Validated task lifecycle transitions
@@ -89,9 +92,33 @@ only the final role to `developer`.
 The MCP tool surface includes:
 
 - `register_role`, `whoami`
-- `create_task`, `list_tasks`, `update_task_status`
-- `send_message`, `get_inbox`, `acknowledge_message`, `get_thread`
+- `create_task`, `list_tasks`, `get_work_queue`, `update_task_status`
+- `send_message`, `get_inbox`, `acknowledge_message`, `accept_handoff`, `get_thread`
 - `create_artifact`, `list_artifacts`, `get_artifact`
+
+## Efficient agent loop
+
+Use `get_work_queue` as the first AgentCorp call in every agent session and
+again after each handoff or status change. It combines unread messages, active
+tasks, and prioritized next actions so an agent does not need to independently
+reconcile `get_inbox`, `list_tasks`, and task threads.
+
+For a gated task handoff:
+
+1. The planner creates the task with an intended `assigned_to` and sends a
+   linked `proposal`.
+2. Until that proposal is approved, the task remains `proposed` and is hidden
+   from the intended assignee.
+3. Approval atomically activates the task as `assigned` and exposes the
+   proposal in the assignee's work queue.
+4. The assignee calls `accept_handoff` once. AgentCorp acknowledges the proposal
+   and requests the `in_progress` transition without creating duplicates on
+   retries.
+
+MCP servers expose tools; they cannot independently wake an idle model inside
+an IDE. Configure each agent's standing instructions to call `get_work_queue`
+at session start. Background wake-up requires a host-specific runner or
+notification adapter and is not claimed by this preview.
 
 ## Human approval console
 

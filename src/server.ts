@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -194,11 +194,8 @@ export class AgentCorpServer {
       startedAt: this.startedAt,
     };
 
-    try {
-      writeFileSync(this.daemonFilePath, JSON.stringify(daemonInfo, null, 2), "utf8");
-    } catch {
-      // Best effort writing daemon info
-    }
+    mkdirSync(dirname(this.daemonFilePath), { recursive: true });
+    writeFileSync(this.daemonFilePath, JSON.stringify(daemonInfo, null, 2), "utf8");
 
     return daemonInfo;
   }
@@ -283,6 +280,8 @@ export class AgentCorpServer {
           status: "ok",
           company: this.config.company.name,
           roles: this.config.roles.map((r) => r.id),
+          pid: process.pid,
+          startedAt: this.startedAt,
           uptimeSeconds: this.startedAt ? Math.floor((Date.now() - new Date(this.startedAt).getTime()) / 1000) : 0,
           pendingApprovals: this.broker.listPendingApprovals().length,
           schemaVersion: this.database.getSchemaVersion(),

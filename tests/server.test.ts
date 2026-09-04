@@ -60,10 +60,18 @@ describe("AgentCorpServer", () => {
   it("serves health endpoint without authentication", async () => {
     const res = await fetch(`${server.getUrl()}/health`);
     expect(res.status).toBe(200);
-    const body = await res.json() as { status: string; company: string; roles: string[] };
+    const body = await res.json() as {
+      status: string;
+      company: string;
+      roles: string[];
+      pid: number;
+      startedAt: string;
+    };
     expect(body.status).toBe("ok");
     expect(body.company).toBe("Server Test Corp");
     expect(body.roles).toEqual(["architect", "developer"]);
+    expect(body.pid).toBe(process.pid);
+    expect(new Date(body.startedAt).toString()).not.toBe("Invalid Date");
   });
 
   it("rejects unauthenticated MCP connection", async () => {

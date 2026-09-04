@@ -16,3 +16,7 @@ Versioning after the first public release.
 - Added versioned database migrations with schema enforcement.
 - Added human-readable Markdown and JSON audit trail export (`coord/`).
 - Added daemon lifecycle management (`start`, `stop`, `status`).
+- Added approval-bound task activation so intended assignees cannot act on proposed work early.
+- Added `get_work_queue` for a single prioritized coordination view.
+- Added idempotent `accept_handoff` to acknowledge and start approved work without duplicate transitions.
+- Made daemon lifecycle control self-heal stale PID metadata and verify live identity before stopping a process.

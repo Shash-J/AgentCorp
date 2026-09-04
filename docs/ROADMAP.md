@@ -42,6 +42,8 @@ and a real-time dark glassmorphic web dashboard.
 - Single-page dark glassmorphic web dashboard (`/console`) with no external framework dependencies
 - Side-by-side JSON diff viewer & payload editor with live validation
 - Role inboxes, task threads, artifact viewer, and runtime policy toggle controls
+- Prioritized per-role work queue and idempotent approved-handoff acceptance
+- Approval-bound assignment visibility so agents cannot act on proposed work early
 - Zero extra runtime dependencies, preserving ultra-fast startup
 
 Exit criteria met: A user can operate, monitor, and sign off multi-agent workflows
@@ -54,6 +56,7 @@ either completely inside their terminal or via an intuitive live web dashboard w
 - HTTP artifact content store with size limits and streaming
 - Pluggable policy match dimensions
 - OpenTelemetry traces and metrics
+- Host-specific notification or runner adapters that can wake idle agents when approved work arrives
 
 Exit criteria: three vendor-distinct agents complete the same workflow without
 custom broker code.

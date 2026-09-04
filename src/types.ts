@@ -103,6 +103,40 @@ export interface TaskRecord {
   updatedAt: string;
 }
 
+export type WorkQueueActionKind =
+  | "accept_handoff"
+  | "acknowledge_message"
+  | "start_task"
+  | "continue_task"
+  | "resolve_blocker"
+  | "send_proposal"
+  | "review_task";
+
+export interface WorkQueueAction {
+  kind: WorkQueueActionKind;
+  priority: number;
+  reason: string;
+  messageId?: string;
+  taskId?: string;
+  suggestedTool?: {
+    name: string;
+    arguments: Record<string, unknown>;
+  };
+}
+
+export interface RoleWorkQueue {
+  roleId: string;
+  generatedAt: string;
+  summary: {
+    unreadMessages: number;
+    activeTasks: number;
+    blockedTasks: number;
+  };
+  unreadMessages: MessageRecord[];
+  activeTasks: TaskRecord[];
+  nextActions: WorkQueueAction[];
+}
+
 export interface ArtifactRecord {
   artifactId: string;
   type: string;

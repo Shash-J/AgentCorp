@@ -230,7 +230,10 @@ export class AgentCorpDatabase {
     return (this.db.prepare(`
       SELECT DISTINCT t.* FROM tasks t
       LEFT JOIN messages m ON m.task_id = t.task_id
-      WHERE t.created_by = ? OR t.assigned_to = ? OR m.from_role = ? OR m.to_role = ?
+      WHERE t.created_by = ?
+        OR (t.assigned_to = ? AND t.status <> 'proposed')
+        OR m.from_role = ?
+        OR (m.to_role = ? AND m.status IN ('approved', 'delivered', 'acknowledged'))
       ORDER BY t.updated_at DESC
     `).all(roleId, roleId, roleId, roleId) as Row[]).map(mapTask);
   }
@@ -261,6 +264,16 @@ export class AgentCorpDatabase {
   resolveTransition(id: string, status: string, resolvedAt: string): void {
     this.db.prepare("UPDATE task_transitions SET status = ?, resolved_at = ? WHERE transition_id = ?")
       .run(status, resolvedAt, id);
+  }
+
+  hasPendingTransition(taskId: string, toStatus: string, requestedBy: string): boolean {
+    const row = this.db.prepare(`
+      SELECT 1 AS found
+      FROM task_transitions
+      WHERE task_id = ? AND to_status = ? AND requested_by = ? AND status = 'pending'
+      LIMIT 1
+    `).get(taskId, toStatus, requestedBy) as Row | undefined;
+    return row !== undefined;
   }
 
   insertMessage(message: MessageRecord): void {

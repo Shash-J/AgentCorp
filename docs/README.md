@@ -17,7 +17,7 @@ Welcome to the official AgentCorp documentation. AgentCorp is an open-source, lo
 * **[Human Oversight Console Guide](guides/human-console.md)**: Operating the terminal-native interactive review loop (`agentcorp review`) and the dark glassmorphic web dashboard (`agentcorp console --browser`).
 
 ### 3. Core References
-* **[MCP Tools Reference](mcp-tools-reference.md)**: Exhaustive reference for all 10 MCP tools exposed to agents (`whoami`, `register_role`, `create_task`, `list_tasks`, `update_task_status`, `send_message`, `get_inbox`, `acknowledge_message`, `get_thread`, `create_artifact`, `list_artifacts`, `get_artifact`).
+* **[MCP Tools Reference](mcp-tools-reference.md)**: Exhaustive reference for all 14 MCP tools exposed to agents, including the prioritized `get_work_queue` view and idempotent `accept_handoff` operation.
 * **[CLI Reference](cli-reference.md)**: Complete command-line interface manual (`init`, `validate`, `start`, `stop`, `status`, `console`, `review`, `approvals`, `policies`, `audit`, `mcp`).
 * **[Policy & Safety Guide](policy-guide.md)**: Authoring safety rules, priority cascades, subset risk tag matching, and approval enforcement.
 

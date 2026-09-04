@@ -106,6 +106,8 @@ The broker daemon maintains an event-driven pub/sub architecture:
 * **Domain Events**: `message_created`, `message_delivered`, `approval_created`, `approval_decided`, `task_status_changed`, `policy_changed`.
 * **Server-Sent Events (`/api/events`)**: Pushes events to connected terminal observers and web consoles in real-time.
 * **Resilience**: Includes automatic 15-second keep-alive heartbeats and clean connection teardown on client disconnect.
+* **Agent work discovery**: `get_work_queue` projects unread messages, active tasks, and prioritized next actions from the same transactional state, avoiding client-side reconciliation races.
+* **Approved handoffs**: An intended assignee cannot observe a proposed task until its linked proposal is delivered. Proposal approval activates the assignment; `accept_handoff` then acknowledges and starts it idempotently.
 
 ---
 

@@ -38,6 +38,11 @@ Sends a graceful termination signal (`SIGTERM`) to the running background daemon
 ### `agentcorp status`
 Checks whether the central broker daemon is running, healthy, and reports active roles and uptime.
 
+The daemon health response includes its live process ID and start time. If the
+local control file is stale, `status` repairs it from that live identity. The
+`stop` command refuses to signal an unreachable or unverifiable PID, preventing
+an old control file from terminating an unrelated process.
+
 ---
 
 ## 2. Human Oversight & Console

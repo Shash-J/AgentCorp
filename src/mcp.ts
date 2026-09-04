@@ -93,6 +93,16 @@ export function createMcpServer(
   );
 
   server.registerTool(
+    "get_work_queue",
+    {
+      title: "Get the role's prioritized work queue",
+      description: "Return unread messages, active tasks, and ordered next actions in one call. Use this at session start and after every handoff or status change.",
+      inputSchema: z.object({}),
+    },
+    () => guarded(() => broker.getWorkQueue(callerRole)),
+  );
+
+  server.registerTool(
     "send_message",
     {
       title: "Send a typed agent message",
@@ -136,6 +146,16 @@ export function createMcpServer(
       inputSchema: z.object({ message_id: z.string().min(1) }),
     },
     ({ message_id }) => guarded(() => broker.acknowledgeMessage(callerRole, message_id)),
+  );
+
+  server.registerTool(
+    "accept_handoff",
+    {
+      title: "Accept an approved task handoff",
+      description: "Idempotently acknowledge a delivered proposal and start its assigned task. If starting work is policy-gated, one task approval is requested and retries do not duplicate it.",
+      inputSchema: z.object({ message_id: z.string().min(1) }),
+    },
+    ({ message_id }) => guarded(() => broker.acceptHandoff(callerRole, message_id)),
   );
 
   server.registerTool(

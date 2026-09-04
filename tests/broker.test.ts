@@ -133,6 +133,18 @@ describe("AgentCorpBroker", () => {
       assignedTo: "developer",
     });
 
+    expect(instance.listTasks("developer")).toEqual([]);
+    const proposal = instance.sendMessage("architect", {
+      toRole: "developer",
+      type: "proposal",
+      taskId: task.taskId,
+      payload: { objective: "Implement broker" },
+    });
+    const messageApproval = instance.listPendingApprovals()
+      .find((approval) => approval.subjectId === proposal.messageId);
+    instance.approve(messageApproval!.approvalId);
+    expect(instance.listTasks("developer")[0]?.status).toBe("assigned");
+
     const started = instance.updateTaskStatus("developer", task.taskId, "in_progress");
     expect(started.pendingApproval).toBe(false);
 
@@ -226,5 +238,84 @@ describe("AgentCorpBroker", () => {
       riskTags: ["read_only"],
     });
     expect(safeUpdate.status).toBe("delivered");
+  });
+
+  it("turns an approved proposal into an efficient, idempotent handoff", () => {
+    const instance = broker([
+      {
+        id: "gate-proposals",
+        subject: "message",
+        message_type: "proposal",
+        priority: 100,
+        action: "require_human",
+      },
+      {
+        id: "start-work",
+        subject: "task",
+        to_status: "in_progress",
+        priority: 50,
+        action: "auto_approve",
+      },
+    ]);
+    const task = instance.createTask("architect", {
+      title: "Implement work queue",
+      description: "Give each role one prioritized next-action view",
+      assignedTo: "developer",
+    });
+
+    expect(task.status).toBe("proposed");
+    expect(instance.listTasks("developer")).toEqual([]);
+    expect(instance.getWorkQueue("developer").nextActions).toEqual([]);
+
+    const proposal = instance.sendMessage("architect", {
+      toRole: "developer",
+      type: "proposal",
+      taskId: task.taskId,
+      payload: { acceptanceCriteria: ["one-call queue", "idempotent acceptance"] },
+    });
+    expect(instance.getWorkQueue("architect").nextActions)
+      .not.toEqual(expect.arrayContaining([expect.objectContaining({ kind: "send_proposal" })]));
+
+    const approval = instance.listPendingApprovals().find((item) => item.subjectId === proposal.messageId);
+    instance.approve(approval!.approvalId, "Approved handoff");
+
+    const queue = instance.getWorkQueue("developer");
+    expect(queue.summary).toMatchObject({ unreadMessages: 1, activeTasks: 1 });
+    expect(queue.activeTasks[0]?.status).toBe("assigned");
+    expect(queue.nextActions[0]).toMatchObject({
+      kind: "accept_handoff",
+      messageId: proposal.messageId,
+      taskId: task.taskId,
+      suggestedTool: { name: "accept_handoff" },
+    });
+
+    const accepted = instance.acceptHandoff("developer", proposal.messageId);
+    expect(accepted.message.status).toBe("acknowledged");
+    expect(accepted.task.status).toBe("in_progress");
+    expect(accepted.pendingApproval).toBe(false);
+    expect(instance.getWorkQueue("developer").summary.unreadMessages).toBe(0);
+
+    const retried = instance.acceptHandoff("developer", proposal.messageId);
+    expect(retried.task.status).toBe("in_progress");
+  });
+
+  it("does not duplicate a policy-gated start transition when handoff acceptance is retried", () => {
+    const instance = broker();
+    const task = instance.createTask("architect", {
+      title: "Gated start",
+      assignedTo: "developer",
+    });
+    const proposal = instance.sendMessage("architect", {
+      toRole: "developer",
+      type: "proposal",
+      taskId: task.taskId,
+      payload: { objective: "Start only after approval" },
+    });
+    const proposalApproval = instance.listPendingApprovals()[0]!;
+    instance.approve(proposalApproval.approvalId);
+
+    expect(instance.acceptHandoff("developer", proposal.messageId).pendingApproval).toBe(true);
+    expect(instance.acceptHandoff("developer", proposal.messageId).pendingApproval).toBe(true);
+    expect(instance.listPendingApprovals().filter((item) => item.subject === "task")).toHaveLength(1);
   });
 });

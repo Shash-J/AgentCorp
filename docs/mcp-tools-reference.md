@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-AgentCorp exposes 12 coordination tools over the Model Context Protocol (MCP). Every tool call executes within the authenticated role context of the connection, meaning caller identity (`fromRole`, `producedBy`, `callerRole`) is enforced server-side and cannot be spoofed.
+AgentCorp exposes 14 coordination tools over the Model Context Protocol (MCP). Every tool call executes within the authenticated role context of the connection, meaning caller identity (`fromRole`, `producedBy`, `callerRole`) is enforced server-side and cannot be spoofed.
 
 ---
 
@@ -44,7 +44,7 @@ Creates a new coordinated task in the broker.
 * **Inputs**:
   * `title` *(string, required)*: Brief summary of the task.
   * `description` *(string, optional)*: Detailed task requirements, constraints, or acceptance criteria.
-  * `assigned_to` *(string, optional)*: Role ID to assign the task to (must be an allowed peer).
+  * `assigned_to` *(string, optional)*: Intended assignee role (must be an allowed peer). The task remains `proposed` and hidden from that role until a linked proposal is approved.
 * **Returns**:
   ```json
   {
@@ -60,10 +60,17 @@ Creates a new coordinated task in the broker.
   ```
 
 ### `list_tasks`
-Lists all tasks where the caller's role participates (either as creator or assignee).
+Lists all visible tasks where the caller's role participates. A proposed task is not visible to its intended assignee until an approved proposal activates the assignment.
 
 * **Inputs**: None (`{}`)
 * **Returns**: Array of `TaskRecord` objects.
+
+### `get_work_queue`
+Returns the bound role's complete actionable coordination state in one call.
+
+* **Inputs**: None (`{}`)
+* **Returns**: Unread delivered messages, non-terminal visible tasks, summary counts, and prioritized `nextActions`. When an action can be performed directly, `suggestedTool` contains the exact MCP tool name and arguments.
+* **Recommended use**: Call at session start and after every handoff or task-status change instead of separately reconciling the inbox, task list, and threads.
 
 ### `update_task_status`
 Transitions a task through its validated lifecycle state graph (`proposed` → `assigned` → `in_progress` → `blocked` / `awaiting_review` → `completed` / `failed` / `cancelled`).
@@ -118,7 +125,7 @@ Submits a typed message through recipient validation and the policy engine.
 Retrieves delivered and approved messages addressed to the bound role. Messages held in `pending_approval` are not visible to the recipient until approved.
 
 * **Inputs**: None (`{}`)
-* **Returns**: Array of `MessageRecord` objects with `status: "delivered"` or `"acknowledged"`.
+* **Returns**: Array of unread `MessageRecord` objects with `status: "delivered"` or `"approved"`. Acknowledged messages remain in task history but leave the inbox.
 
 ### `acknowledge_message`
 Marks a delivered message as acknowledged by its recipient.
@@ -126,6 +133,16 @@ Marks a delivered message as acknowledged by its recipient.
 * **Inputs**:
   * `message_id` *(string, required)*: Message ID to acknowledge.
 * **Returns**: Updated `MessageRecord` with `status: "acknowledged"`.
+
+Acknowledgement is idempotent: retrying an already acknowledged message returns its current record.
+
+### `accept_handoff`
+Accepts an approved task proposal using one idempotent coordination operation.
+
+* **Inputs**:
+  * `message_id` *(string, required)*: Delivered proposal message linked to a task assigned to the caller.
+* **Behavior**: Acknowledges the proposal and requests the linked task's `in_progress` transition. If that transition requires human approval, retries reuse the existing pending transition rather than creating duplicate approvals.
+* **Returns**: The acknowledged message, current task, and `pendingApproval` flag.
 
 ### `get_thread`
 Retrieves the complete message history for a given task visible to the caller's role.

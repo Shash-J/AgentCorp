@@ -11,7 +11,7 @@ import { loadOrgConfig } from "./config.js";
 import { ensureCredentials, loadCredentials } from "./credentials.js";
 import { AgentCorpDatabase } from "./database.js";
 import { AgentCorpError } from "./errors.js";
-import { AgentCorpServer, readDaemonInfo } from "./server.js";
+import { AgentCorpServer, readDaemonInfo, type DaemonInfo } from "./server.js";
 import { ensureDaemonRunning, isDaemonHealthy, runStdioAdapter } from "./stdio-adapter.js";
 import { AgentCorpTui } from "./tui.js";
 import type { InitialPolicy, PendingApproval, PolicyRule } from "./types.js";
@@ -83,6 +83,38 @@ interface GlobalOptions {
 
 function output(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+interface DaemonHealth {
+  status: "ok";
+  pid: number;
+  startedAt: string;
+  [key: string]: unknown;
+}
+
+async function refreshDaemonInfo(
+  recorded: DaemonInfo,
+): Promise<{ info: DaemonInfo; health: DaemonHealth; controlFileRepaired: boolean } | null> {
+  try {
+    const res = await fetch(`${recorded.url}/health`, { signal: AbortSignal.timeout(1500) });
+    if (!res.ok) return null;
+    const health = await res.json() as DaemonHealth;
+    if (health.status !== "ok" || !Number.isInteger(health.pid) || !health.startedAt) return null;
+    const info = { ...recorded, pid: health.pid, startedAt: health.startedAt };
+    const changed = info.pid !== recorded.pid || info.startedAt !== recorded.startedAt;
+    let controlFileRepaired = false;
+    if (changed) {
+      try {
+        writeFileSync(resolve(".agentcorp/daemon.json"), JSON.stringify(info, null, 2), "utf8");
+        controlFileRepaired = true;
+      } catch {
+        // Health remains authoritative even if the local control file cannot be repaired.
+      }
+    }
+    return { info, health, controlFileRepaired };
+  } catch {
+    return null;
+  }
 }
 
 function openBroker(options: GlobalOptions): { broker: AgentCorpBroker; db: AgentCorpDatabase } {
@@ -234,6 +266,24 @@ program
   .action(async (options: { port: string; host: string; daemon?: boolean }) => {
     const gOpts = program.opts<GlobalOptions>();
     if (options.daemon) {
+      const recorded = readDaemonInfo();
+      if (recorded) {
+        const live = await refreshDaemonInfo(recorded);
+        if (live) {
+          output({ startedInBackground: false, alreadyRunning: true, ...live.info });
+          return;
+        }
+        if (await isDaemonHealthy(recorded.url)) {
+          output({
+            startedInBackground: false,
+            alreadyRunning: true,
+            ...recorded,
+            identityVerified: false,
+            message: "Daemon is healthy but predates live identity reporting; restart it before relying on PID control",
+          });
+          return;
+        }
+      }
       const args = [
         resolve(process.argv[1] ?? "dist/cli.js"),
         "start",
@@ -252,8 +302,21 @@ program
         env: process.env,
       });
       child.unref();
-      output({ startedInBackground: true, pid: child.pid });
-      return;
+      const deadline = Date.now() + 6000;
+      while (Date.now() < deadline) {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 150));
+        const info = readDaemonInfo();
+        if (!info) continue;
+        const live = await refreshDaemonInfo(info);
+        if (live) {
+          output({ startedInBackground: true, ...live.info });
+          return;
+        }
+      }
+      throw new AgentCorpError(
+        "DAEMON_SPAWN_FAILED",
+        `Background daemon process ${child.pid ?? "unknown"} did not become healthy within 6 seconds`,
+      );
     }
 
     const { broker } = openBroker(gOpts);
@@ -284,15 +347,27 @@ program
 program
   .command("stop")
   .description("Stop the running central local broker daemon")
-  .action(() => {
+  .action(async () => {
     const info = readDaemonInfo();
     if (!info) {
       output({ stopped: false, message: "No running daemon recorded" });
       return;
     }
+    const live = await refreshDaemonInfo(info);
+    if (!live) {
+      const healthyLegacyDaemon = await isDaemonHealthy(info.url);
+      output({
+        stopped: false,
+        message: healthyLegacyDaemon
+          ? "Daemon is healthy but does not report a verifiable PID; refusing unsafe process termination"
+          : "Recorded daemon is unreachable; refusing to signal a potentially stale PID",
+        recordedPid: info.pid,
+      });
+      return;
+    }
     try {
-      process.kill(info.pid, "SIGTERM");
-      output({ stopped: true, pid: info.pid });
+      process.kill(live.info.pid, "SIGTERM");
+      output({ stopped: true, pid: live.info.pid, controlFileRepaired: live.controlFileRepaired });
     } catch (err) {
       output({ stopped: false, message: String(err) });
     }
@@ -307,18 +382,22 @@ program
       output({ status: "stopped" });
       return;
     }
-    const healthy = await isDaemonHealthy(info.url);
-    if (!healthy) {
-      output({ status: "unreachable", ...info });
+    const live = await refreshDaemonInfo(info);
+    if (!live) {
+      const healthyLegacyDaemon = await isDaemonHealthy(info.url);
+      output({
+        status: healthyLegacyDaemon ? "running" : "unreachable",
+        ...info,
+        identityVerified: false,
+      });
       return;
     }
-    try {
-      const res = await fetch(`${info.url}/health`);
-      const health = await res.json();
-      output({ status: "running", ...info, health });
-    } catch (err) {
-      output({ status: "unreachable", ...info, error: String(err) });
-    }
+    output({
+      status: "running",
+      ...live.info,
+      health: live.health,
+      controlFileRepaired: live.controlFileRepaired,
+    });
   });
 
 program

@@ -15,6 +15,7 @@ import {
   type PendingApproval,
   type PolicyRule,
   type RoleDefinition,
+  type RoleWorkQueue,
   type TaskRecord,
   type TaskStatus,
 } from "./types.js";
@@ -158,7 +159,9 @@ export class AgentCorpBroker extends EventEmitter {
       description: input.description ?? null,
       createdBy: callerRole,
       assignedTo: input.assignedTo ?? null,
-      status: input.assignedTo ? "assigned" : "proposed",
+      // An intended assignee must not receive actionable work until a linked
+      // proposal has passed policy/human approval.
+      status: "proposed",
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -230,6 +233,7 @@ export class AgentCorpBroker extends EventEmitter {
     };
 
     let approvalId: string | undefined;
+    let assignedTask: TaskRecord | undefined;
     this.database.transaction(() => {
       this.database.insertMessage(message);
       this.database.insertMessageEvent({
@@ -262,10 +266,19 @@ export class AgentCorpBroker extends EventEmitter {
           decidedAt: null,
           decisionNote: null,
         });
+      } else {
+        assignedTask = this.assignTaskForApprovedProposal(message, timestamp);
       }
     });
 
     this.emitDomainEvent("message_created", message);
+    if (assignedTask) {
+      this.emitDomainEvent("task_status_changed", {
+        taskId: assignedTask.taskId,
+        status: "assigned",
+        task: assignedTask,
+      });
+    }
     if (status === "pending_approval" && approvalId) {
       this.emitDomainEvent("approval_created", {
         approvalId,
@@ -283,10 +296,125 @@ export class AgentCorpBroker extends EventEmitter {
     return this.database.listInbox(callerRole);
   }
 
+  getWorkQueue(callerRole: string): RoleWorkQueue {
+    this.role(callerRole);
+    const unreadMessages = this.getInbox(callerRole);
+    const activeTasks = this.listTasks(callerRole).filter((task) =>
+      !["completed", "failed", "cancelled"].includes(task.status));
+    const nextActions: RoleWorkQueue["nextActions"] = [];
+    const handoffTaskIds = new Set<string>();
+
+    for (const message of unreadMessages) {
+      const task = message.taskId ? this.database.getTask(message.taskId) : undefined;
+      if (
+        message.type === "proposal" && task && task.assignedTo === callerRole &&
+        task.status === "assigned"
+      ) {
+        handoffTaskIds.add(task.taskId);
+        nextActions.push({
+          kind: "accept_handoff",
+          priority: 100,
+          reason: `Approved proposal from ${message.fromRole} is ready to start`,
+          messageId: message.messageId,
+          taskId: task.taskId,
+          suggestedTool: {
+            name: "accept_handoff",
+            arguments: { message_id: message.messageId },
+          },
+        });
+      } else {
+        nextActions.push({
+          kind: "acknowledge_message",
+          priority: 80,
+          reason: `Unread ${message.type} from ${message.fromRole}`,
+          messageId: message.messageId,
+          ...(message.taskId ? { taskId: message.taskId } : {}),
+          suggestedTool: {
+            name: "acknowledge_message",
+            arguments: { message_id: message.messageId },
+          },
+        });
+      }
+    }
+
+    for (const task of activeTasks) {
+      if (task.assignedTo === callerRole && task.status === "assigned" && !handoffTaskIds.has(task.taskId)) {
+        nextActions.push({
+          kind: "start_task",
+          priority: 70,
+          reason: "Assigned task is ready to start",
+          taskId: task.taskId,
+          suggestedTool: {
+            name: "update_task_status",
+            arguments: { task_id: task.taskId, new_status: "in_progress", risk_tags: [] },
+          },
+        });
+      } else if (task.assignedTo === callerRole && task.status === "blocked") {
+        nextActions.push({
+          kind: "resolve_blocker",
+          priority: 90,
+          reason: "Task is blocked; report or resolve the blocker before resuming",
+          taskId: task.taskId,
+        });
+      } else if (task.assignedTo === callerRole && task.status === "in_progress") {
+        nextActions.push({
+          kind: "continue_task",
+          priority: 50,
+          reason: "Continue implementation or submit the task for review",
+          taskId: task.taskId,
+        });
+      } else if (task.createdBy === callerRole && task.status === "proposed" && task.assignedTo) {
+        const hasOpenProposal = this.database.listThread(task.taskId, callerRole).some((message) =>
+          message.type === "proposal" && message.toRole === task.assignedTo &&
+          !["rejected"].includes(message.status));
+        if (hasOpenProposal) continue;
+        nextActions.push({
+          kind: "send_proposal",
+          priority: 60,
+          reason: `Task is waiting for an approved proposal to ${task.assignedTo}`,
+          taskId: task.taskId,
+          suggestedTool: {
+            name: "send_message",
+            arguments: {
+              to_role: task.assignedTo,
+              type: "proposal",
+              task_id: task.taskId,
+              payload: { objective: task.description ?? task.title },
+              references: [],
+              risk_tags: [],
+            },
+          },
+        });
+      } else if (task.createdBy === callerRole && task.status === "awaiting_review") {
+        nextActions.push({
+          kind: "review_task",
+          priority: 70,
+          reason: "Implementation is awaiting your review",
+          taskId: task.taskId,
+        });
+      }
+    }
+
+    nextActions.sort((a, b) => b.priority - a.priority);
+    return {
+      roleId: callerRole,
+      generatedAt: this.timestamp(),
+      summary: {
+        unreadMessages: unreadMessages.length,
+        activeTasks: activeTasks.length,
+        blockedTasks: activeTasks.filter((task) => task.status === "blocked").length,
+      },
+      unreadMessages,
+      activeTasks,
+      nextActions,
+    };
+  }
+
   acknowledgeMessage(callerRole: string, messageId: string): MessageRecord {
     const message = this.database.getMessage(messageId);
     invariant(message, "MESSAGE_NOT_FOUND", `Message not found: ${messageId}`);
     invariant(message.toRole === callerRole, "FORBIDDEN", "Only the recipient can acknowledge a message");
+    if (message.status === "acknowledged") return message;
     invariant(
       message.status === "delivered" || message.status === "approved",
       "INVALID_MESSAGE_STATE",
@@ -302,6 +430,34 @@ export class AgentCorpBroker extends EventEmitter {
     });
     this.emitDomainEvent("message_status_changed", { messageId, status: "acknowledged", role: callerRole });
     return this.database.getMessage(messageId)!;
+  }
+
+  acceptHandoff(
+    callerRole: string,
+    messageId: string,
+  ): { message: MessageRecord; task: TaskRecord; pendingApproval: boolean } {
+    const message = this.database.getMessage(messageId);
+    invariant(message, "MESSAGE_NOT_FOUND", `Message not found: ${messageId}`);
+    invariant(message.toRole === callerRole, "FORBIDDEN", "Only the recipient can accept a handoff");
+    invariant(message.type === "proposal", "INVALID_HANDOFF", "A handoff must be a proposal message");
+    invariant(message.taskId, "INVALID_HANDOFF", "A handoff proposal must reference a task");
+    invariant(
+      ["approved", "delivered", "acknowledged"].includes(message.status),
+      "INVALID_MESSAGE_STATE",
+      "The proposal must be approved and delivered before it can be accepted",
+    );
+
+    const task = this.database.getTask(message.taskId);
+    invariant(task, "TASK_NOT_FOUND", `Task not found: ${message.taskId}`);
+    invariant(task.assignedTo === callerRole, "FORBIDDEN", "The task is assigned to another role");
+
+    const acknowledged = this.acknowledgeMessage(callerRole, messageId);
+    if (!["proposed", "assigned"].includes(task.status)) {
+      return { message: acknowledged, task, pendingApproval: false };
+    }
+    invariant(task.status === "assigned", "INVALID_HANDOFF", `Cannot accept a task in ${task.status} state`);
+    const started = this.updateTaskStatus(callerRole, task.taskId, "in_progress");
+    return { message: acknowledged, task: started.task, pendingApproval: started.pendingApproval };
   }
 
   getThread(callerRole: string, taskId: string): MessageRecord[] {
@@ -388,6 +544,10 @@ export class AgentCorpBroker extends EventEmitter {
       `Task cannot transition from ${task.status} to ${toStatus}`,
     );
 
+    if (this.database.hasPendingTransition(taskId, toStatus, callerRole)) {
+      return { task, pendingApproval: true };
+    }
+
     const decision = evaluatePolicy(this.database.listPolicies(), {
       subject: "task",
       fromRole: callerRole,
@@ -457,6 +617,8 @@ export class AgentCorpBroker extends EventEmitter {
     invariant(approval.status === "pending", "APPROVAL_RESOLVED", "Approval has already been resolved");
     const timestamp = this.timestamp();
 
+    let assignedTask: TaskRecord | undefined;
+    let transitionedTask: TaskRecord | undefined;
     this.database.transaction(() => {
       if (approval.subject === "message") {
         const message = this.database.getMessage(approval.subjectId);
@@ -474,6 +636,7 @@ export class AgentCorpBroker extends EventEmitter {
           id: this.id("evt"), messageId: message.messageId, status: "delivered", actor: "human",
           note: note ?? null, createdAt: timestamp,
         });
+        assignedTask = this.assignTaskForApprovedProposal(message, timestamp);
       } else {
         invariant(editedPayload === undefined, "INVALID_APPROVAL_EDIT", "Task transitions cannot edit message payloads");
         const transition = this.database.getTransition(approval.subjectId);
@@ -487,6 +650,7 @@ export class AgentCorpBroker extends EventEmitter {
         );
         this.database.updateTaskStatus(task.taskId, String(transition.to_status), timestamp);
         this.database.resolveTransition(approval.subjectId, "approved", timestamp);
+        transitionedTask = this.database.getTask(task.taskId);
       }
       this.database.resolveApproval(approvalId, "approved", timestamp, note ?? null, editedPayload);
     });
@@ -494,8 +658,20 @@ export class AgentCorpBroker extends EventEmitter {
     this.emitDomainEvent("approval_resolved", { approvalId, status: "approved", subject: approval.subject });
     if (approval.subject === "message") {
       this.emitDomainEvent("message_status_changed", { messageId: approval.subjectId, status: "delivered" });
+      if (assignedTask) {
+        this.emitDomainEvent("task_status_changed", {
+          taskId: assignedTask.taskId,
+          status: "assigned",
+          task: assignedTask,
+        });
+      }
     } else {
-      this.emitDomainEvent("task_status_changed", { transitionId: approval.subjectId, status: "approved" });
+      this.emitDomainEvent("task_status_changed", {
+        transitionId: approval.subjectId,
+        taskId: transitionedTask?.taskId,
+        status: transitionedTask?.status,
+        task: transitionedTask,
+      });
     }
 
     return this.database.getApproval(approvalId)!;
@@ -579,9 +755,29 @@ export class AgentCorpBroker extends EventEmitter {
   }
 
   private assertTaskParticipant(task: TaskRecord, roleId: string): void {
-    const involved = task.createdBy === roleId || task.assignedTo === roleId ||
+    const involved = task.createdBy === roleId ||
+      (task.assignedTo === roleId && task.status !== "proposed") ||
       this.database.listThread(task.taskId, roleId).length > 0;
     invariant(involved, "FORBIDDEN", `Role ${roleId} is not a participant in task ${task.taskId}`);
+  }
+
+  private assignTaskForApprovedProposal(message: MessageRecord, timestamp: string): TaskRecord | undefined {
+    if (message.type !== "proposal" || !message.taskId) return undefined;
+    const task = this.database.getTask(message.taskId);
+    if (!task || task.status !== "proposed" || task.assignedTo !== message.toRole) return undefined;
+    const transitionId = this.id("trn");
+    this.database.insertTransition({
+      id: transitionId,
+      taskId: task.taskId,
+      fromStatus: "proposed",
+      toStatus: "assigned",
+      requestedBy: message.fromRole,
+      status: "approved",
+      createdAt: timestamp,
+    });
+    this.database.resolveTransition(transitionId, "approved", timestamp);
+    this.database.updateTaskStatus(task.taskId, "assigned", timestamp);
+    return this.database.getTask(task.taskId);
   }
 
   private canSeeArtifact(artifact: ArtifactRecord, roleId: string): boolean {

@@ -8,7 +8,8 @@ This guide walks you through configuring **OpenAI Codex** (Desktop App or Extens
 
 OpenAI Codex provides reasoning and planning capabilities. When bound to AgentCorp as the **`architect`**, Codex can:
 - Decompose system goals into milestone tasks (`create_task`).
-- Assign tasks to peer implementers such as Antigravity (`delegate_task`).
+- Prepare tasks for peer implementers (`create_task`) and send linked proposals (`send_message`).
+- Inspect one prioritized coordination view at session start (`get_work_queue`).
 - Dispatch typed architecture proposals and reviews (`send_message`).
 - Review code diffs and artifacts submitted by the developer (`list_artifacts`, `get_artifact`).
 
@@ -62,3 +63,13 @@ In the Codex extension or desktop app, you can issue commands like:
 > *"Check the tasks in AgentCorp, create a new task for 'Implement SQLite Index Optimization', and send a proposal message to the developer role with the architectural specification."*
 
 Codex will automatically call `create_task` and `send_message`, which will appear in your Human Console for approval.
+
+Add this standing instruction to the Codex project guidance:
+
+> At the start of each session and after every coordination mutation, call
+> `get_work_queue`. Follow its highest-priority applicable next action before
+> creating duplicate tasks or messages.
+
+Creating a task with `assigned_to` records the intended assignee but does not
+expose actionable work to that role. The linked proposal's approval activates
+the assignment.
