@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgentCorp — Human Approval & Coordination Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/console.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-logo">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="3" width="20" height="14" rx="2"></rect>
+            <line x1="8" y1="21" x2="16" y2="21"></line>
+            <line x1="12" y1="17" x2="12" y2="21"></line>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <span class="brand-title">AgentCorp</span>
+          <span class="brand-badge">Broker v0.1</span>
+        </div>
+      </div>
+
+      <nav class="nav-menu">
+        <button class="nav-item active" data-tab="approvals" id="nav-approvals">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          </svg>
+          <span>Pending Approvals</span>
+          <span class="badge badge-amber" id="approvals-badge">0</span>
+        </button>
+
+        <button class="nav-item" data-tab="tasks" id="nav-tasks">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 11l3 3L22 4"></path>
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+          </svg>
+          <span>Tasks & Threads</span>
+          <span class="badge" id="tasks-badge">0</span>
+        </button>
+
+        <button class="nav-item" data-tab="inboxes" id="nav-inboxes">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="22 12 16 12 14 15 10 15 8 12 2 12"></polyline>
+            <path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path>
+          </svg>
+          <span>Role Inboxes</span>
+        </button>
+
+        <button class="nav-item" data-tab="artifacts" id="nav-artifacts">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+            <polyline points="10 9 9 9 8 9"></polyline>
+          </svg>
+          <span>Artifacts Store</span>
+        </button>
+
+        <button class="nav-item" data-tab="policies" id="nav-policies">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+          <span>Policy Engine</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="company-card">
+          <span class="company-label">Organization</span>
+          <span class="company-name" id="company-name">Loading...</span>
+        </div>
+        <button class="btn btn-secondary btn-sm w-full" id="export-audit-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+          <span>Export Audit Log</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- Top Header -->
+      <header class="top-bar">
+        <div class="search-box">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input type="text" id="search-input" placeholder="Search tasks, messages, risk tags... (Press / to focus)" />
+        </div>
+
+        <div class="header-status">
+          <div class="connection-status" id="connection-status">
+            <span class="status-dot disconnected" id="sse-indicator"></span>
+            <span id="sse-status-text">Connecting...</span>
+          </div>
+
+          <button class="btn btn-ghost btn-sm" id="auth-modal-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+            <span id="auth-status-label">Admin Token</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- View Containers -->
+      <div class="content-viewport">
+        <!-- 1. Approvals View -->
+        <section class="tab-pane active" id="view-approvals">
+          <div class="pane-header">
+            <div>
+              <h1 class="pane-title">Pending Approvals</h1>
+              <p class="pane-subtitle">Inspect, approve, modify, or reject agent messages and state transitions.</p>
+            </div>
+            <button class="btn btn-secondary btn-sm" id="refresh-approvals-btn">Refresh</button>
+          </div>
+
+          <div class="cards-grid" id="approvals-container">
+            <div class="empty-state">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                <polyline points="22 4 12 14.01 9 11.01"></polyline>
+              </svg>
+              <h3>All clear! No pending approvals</h3>
+              <p>Autonomous agent traffic is flowing or awaiting new tasks.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- 2. Tasks & Threads View -->
+        <section class="tab-pane" id="view-tasks">
+          <div class="pane-header">
+            <div>
+              <h1 class="pane-title">Tasks & Message Threads</h1>
+              <p class="pane-subtitle">Live status and message conversation history between agents.</p>
+            </div>
+          </div>
+
+          <div class="tasks-layout">
+            <div class="tasks-list" id="tasks-list-container">
+              <!-- Rendered task cards -->
+            </div>
+            <div class="thread-viewer" id="thread-viewer-container">
+              <div class="thread-empty">Select a task on the left to inspect its complete message thread.</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 3. Inboxes View -->
+        <section class="tab-pane" id="view-inboxes">
+          <div class="pane-header">
+            <div>
+              <h1 class="pane-title">Role Inboxes</h1>
+              <p class="pane-subtitle">Delivered and acknowledged messages for each connected role.</p>
+            </div>
+            <div class="role-selector-group" id="role-inbox-pills">
+              <!-- Role selector buttons -->
+            </div>
+          </div>
+
+          <div class="inbox-messages" id="inbox-messages-container">
+            <!-- Messages list -->
+          </div>
+        </section>
+
+        <!-- 4. Artifacts View -->
+        <section class="tab-pane" id="view-artifacts">
+          <div class="pane-header">
+            <div>
+              <h1 class="pane-title">Artifacts Store</h1>
+              <p class="pane-subtitle">Access-controlled code diffs, logs, specs, and outputs produced by agents.</p>
+            </div>
+          </div>
+
+          <div class="artifacts-table-container">
+            <table class="data-table" id="artifacts-table">
+              <thead>
+                <tr>
+                  <th>Artifact ID</th>
+                  <th>Name</th>
+                  <th>Type</th>
+                  <th>Produced By</th>
+                  <th>Visibility</th>
+                  <th>Hash</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="artifacts-table-body">
+                <!-- Rows -->
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- 5. Policies View -->
+        <section class="tab-pane" id="view-policies">
+          <div class="pane-header">
+            <div>
+              <h1 class="pane-title">Approval Policy Rules</h1>
+              <p class="pane-subtitle">Rules governing auto-approval vs human gating evaluated in priority order.</p>
+            </div>
+            <button class="btn btn-primary btn-sm" id="create-policy-btn">+ New Rule</button>
+          </div>
+
+          <div class="policies-grid" id="policies-container">
+            <!-- Rendered policy cards -->
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <!-- Diff & Edit Modal -->
+  <div class="modal-backdrop" id="diff-modal" style="display: none;">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <div>
+          <h2 class="modal-title">Edit & Approve Message</h2>
+          <p class="modal-subtitle" id="diff-modal-subtitle">Inspect payload changes before releasing to recipient.</p>
+        </div>
+        <button class="modal-close" id="diff-modal-close">&times;</button>
+      </div>
+
+      <div class="diff-container">
+        <div class="diff-pane">
+          <div class="diff-pane-header">Original Payload (Agent Proposal)</div>
+          <pre class="diff-code" id="diff-original-code"></pre>
+        </div>
+        <div class="diff-pane">
+          <div class="diff-pane-header">
+            <span>Revised Payload (Human Edited)</span>
+            <span class="badge badge-cyan" id="diff-valid-badge">Valid JSON</span>
+          </div>
+          <textarea class="diff-editor" id="diff-editor-input" spellcheck="false"></textarea>
+        </div>
+      </div>
+
+      <div class="modal-body-note">
+        <label for="diff-decision-note">Decision Note (Optional):</label>
+        <input type="text" id="diff-decision-note" class="form-input" placeholder="e.g. Adjusted database connection pool limit" />
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="diff-cancel-btn">Cancel</button>
+        <button class="btn btn-primary" id="diff-submit-approve-btn">Approve With Modification</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rejection Modal -->
+  <div class="modal-backdrop" id="reject-modal" style="display: none;">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h2 class="modal-title">Reject Item</h2>
+        <button class="modal-close" id="reject-modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p>Are you sure you want to reject this pending item? The sending agent will record the rejection.</p>
+        <label for="reject-note-input">Rejection Reason / Guidance:</label>
+        <textarea id="reject-note-input" class="form-textarea" placeholder="e.g. Plan exceeds risk tolerance for deployment on main."></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="reject-cancel-btn">Cancel</button>
+        <button class="btn btn-danger" id="reject-confirm-btn">Confirm Rejection</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Admin Token Config Modal -->
+  <div class="modal-backdrop" id="auth-modal" style="display: none;">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h2 class="modal-title">Admin Authentication</h2>
+        <button class="modal-close" id="auth-modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p>Enter the admin token generated in <code>.agentcorp/credentials.json</code> to access approvals and policy controls.</p>
+        <label for="admin-token-input">Admin Bearer Token:</label>
+        <input type="password" id="admin-token-input" class="form-input" placeholder="admin_..." />
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="auth-cancel-btn">Cancel</button>
+        <button class="btn btn-primary" id="auth-save-btn">Save Token</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="/console.js"></script>
+</body>
+</html>

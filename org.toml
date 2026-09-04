@@ -1,0 +1,42 @@
+[company]
+name = "My Agent Company"
+
+[[roles]]
+id = "architect"
+display_name = "Architect"
+model = "openai/codex"
+interface = "mcp"
+capabilities = ["propose_plan", "review", "approve_merge"]
+allowed_peers = ["developer"]
+artifact_visibility = ["architect", "developer"]
+
+[[roles]]
+id = "developer"
+display_name = "Developer"
+model = "any/mcp-capable-agent"
+interface = "mcp"
+capabilities = ["write_code", "run_tests", "report"]
+allowed_peers = ["architect"]
+artifact_visibility = ["architect", "developer"]
+
+# Higher priority rules win. If no rule matches, human approval is required.
+[[policies]]
+id = "allow-read-only-messages"
+subject = "message"
+priority = 100
+risk_tags = ["read_only"]
+action = "auto_approve"
+
+[[policies]]
+id = "allow-progress-updates"
+subject = "task"
+priority = 50
+to_status = "in_progress"
+action = "auto_approve"
+
+[[policies]]
+id = "gate-task-completion"
+subject = "task"
+priority = 100
+to_status = "completed"
+action = "require_human"
