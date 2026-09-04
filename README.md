@@ -167,6 +167,34 @@ agentcorp policies disable safe-reports
 The recipient cannot see a pending message. Approval changes its state to
 `delivered`; rejection keeps it out of the inbox.
 
+## Storage lifecycle and bounding
+
+AgentCorp enforces bounded memory and disk usage to protect long-running daemons from denial of service and memory exhaustion:
+
+- **Size limits**:
+  - HTTP body: 2 MB maximum (returns HTTP 413 `PAYLOAD_TOO_LARGE`).
+  - Message payload: 1 MB maximum (`PAYLOAD_TOO_LARGE`).
+  - Artifact content: 5 MB maximum (`ARTIFACT_TOO_LARGE`).
+- **Cursor pagination**:
+  - Task, message, inbox, and artifact queries are bounded to 50 items by default (max 200).
+  - MCP tools and Admin REST endpoints support `limit` and opaque `cursor` pagination with optional `envelope` payloads and `X-Next-Cursor` headers.
+- **History pruning and WAL compaction**:
+  ```sh
+  # Dry-run simulate pruning resolved tasks and messages older than 30 days
+  agentcorp prune --older-than 30 --dry-run
+
+  # Execute pruning and compact SQLite database
+  agentcorp prune --older-than 30 --compact
+
+  # Manually checkpoint WAL and vacuum freed pages
+  agentcorp compact
+  ```
+- **Bounded audit export**:
+  ```sh
+  # Export the 100 most recent records or only records since a timestamp
+  agentcorp audit export --limit 100 --since 2026-09-01T00:00:00Z
+  ```
+
 ## Policy semantics
 
 Policies are initially seeded from `org.toml` into SQLite. After the first run,

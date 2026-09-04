@@ -134,6 +134,18 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 3,
+    name: "add_pagination_indexes",
+    up: (db: DatabaseSync) => {
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON tasks(updated_at, task_id);
+        CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at, task_id);
+        CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at, message_id);
+        CREATE INDEX IF NOT EXISTS idx_artifacts_created_at ON artifacts(created_at, artifact_id);
+      `);
+    },
+  },
 ];
 
 export function ensureMigrationTable(db: DatabaseSync): void {

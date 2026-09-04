@@ -8,12 +8,17 @@ import {
   InitialPolicySchema,
   TaskStatusSchema,
   type ArtifactRecord,
+  type BrokerLimits,
   type InitialPolicy,
   type MessageRecord,
   type MessageType,
   type OrgConfig,
+  type PaginatedResult,
+  type PaginationOptions,
   type PendingApproval,
   type PolicyRule,
+  type PruneOptions,
+  type PruneResult,
   type RoleDefinition,
   type RoleWorkQueue,
   type TaskRecord,
@@ -30,7 +35,8 @@ export type BrokerEventType =
   | "policy_saved"
   | "policy_toggled"
   | "artifact_created"
-  | "role_registered";
+  | "role_registered"
+  | "history_pruned";
 
 export interface BrokerDomainEvent {
   type: BrokerEventType;
@@ -68,14 +74,20 @@ export interface CreateArtifactInput {
   relatedTaskId?: string;
 }
 
+export const DEFAULT_MAX_PAYLOAD_SIZE_BYTES = 1 * 1024 * 1024; // 1 MB
+export const DEFAULT_MAX_ARTIFACT_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
+
 export interface BrokerOptions {
   now?: () => Date;
   id?: (prefix: string) => string;
+  limits?: BrokerLimits;
 }
 
 export class AgentCorpBroker extends EventEmitter {
   readonly config: OrgConfig;
   readonly database: AgentCorpDatabase;
+  readonly maxPayloadSizeBytes: number;
+  readonly maxArtifactSizeBytes: number;
   private readonly roles: Map<string, RoleDefinition>;
   private readonly now: () => Date;
   private readonly id: (prefix: string) => string;
@@ -84,6 +96,8 @@ export class AgentCorpBroker extends EventEmitter {
     super();
     this.config = config;
     this.database = database;
+    this.maxPayloadSizeBytes = options.limits?.maxPayloadSizeBytes ?? DEFAULT_MAX_PAYLOAD_SIZE_BYTES;
+    this.maxArtifactSizeBytes = options.limits?.maxArtifactSizeBytes ?? DEFAULT_MAX_ARTIFACT_SIZE_BYTES;
     this.roles = new Map(config.roles.map((role) => [role.id, role]));
     this.now = options.now ?? (() => new Date());
     this.id = options.id ?? ((prefix) => `${prefix}_${randomUUID()}`);
@@ -170,14 +184,26 @@ export class AgentCorpBroker extends EventEmitter {
     return task;
   }
 
-  listTasks(callerRole: string): TaskRecord[] {
+  listTasksPaginated(callerRole: string, options?: PaginationOptions): PaginatedResult<TaskRecord> {
     this.role(callerRole);
-    return this.database.listTasksForRole(callerRole);
+    return this.database.listTasksForRolePaginated(callerRole, options);
+  }
+
+  listTasks(callerRole: string, options?: PaginationOptions): TaskRecord[] {
+    this.role(callerRole);
+    return this.database.listTasksForRole(callerRole, options);
   }
 
   sendMessage(callerRole: string, input: SendMessageInput): MessageRecord {
     this.assertRoute(callerRole, input.toRole);
     MessageTypeSchema.parse(input.type);
+    const serializedPayload = JSON.stringify(input.payload ?? null);
+    const payloadBytes = Buffer.byteLength(serializedPayload, "utf8");
+    invariant(
+      payloadBytes <= this.maxPayloadSizeBytes,
+      "PAYLOAD_TOO_LARGE",
+      `Message payload size (${payloadBytes} bytes) exceeds maximum allowed size of ${this.maxPayloadSizeBytes} bytes`,
+    );
     const references = input.references ?? [];
     const riskTags = [...new Set(input.riskTags ?? [])].sort();
 
@@ -291,9 +317,14 @@ export class AgentCorpBroker extends EventEmitter {
     return message;
   }
 
-  getInbox(callerRole: string): MessageRecord[] {
+  getInboxPaginated(callerRole: string, options?: PaginationOptions): PaginatedResult<MessageRecord> {
     this.role(callerRole);
-    return this.database.listInbox(callerRole);
+    return this.database.listInboxPaginated(callerRole, options);
+  }
+
+  getInbox(callerRole: string, options?: PaginationOptions): MessageRecord[] {
+    this.role(callerRole);
+    return this.database.listInbox(callerRole, options);
   }
 
   getWorkQueue(callerRole: string): RoleWorkQueue {
@@ -460,12 +491,20 @@ export class AgentCorpBroker extends EventEmitter {
     return { message: acknowledged, task: started.task, pendingApproval: started.pendingApproval };
   }
 
-  getThread(callerRole: string, taskId: string): MessageRecord[] {
+  getThreadPaginated(callerRole: string, taskId: string, options?: PaginationOptions): PaginatedResult<MessageRecord> {
     this.role(callerRole);
     const task = this.database.getTask(taskId);
     invariant(task, "TASK_NOT_FOUND", `Task not found: ${taskId}`);
     this.assertTaskParticipant(task, callerRole);
-    return this.database.listThread(taskId, callerRole);
+    return this.database.listThreadPaginated(taskId, callerRole, options);
+  }
+
+  getThread(callerRole: string, taskId: string, options?: PaginationOptions): MessageRecord[] {
+    this.role(callerRole);
+    const task = this.database.getTask(taskId);
+    invariant(task, "TASK_NOT_FOUND", `Task not found: ${taskId}`);
+    this.assertTaskParticipant(task, callerRole);
+    return this.database.listThread(taskId, callerRole, options);
   }
 
   createArtifact(callerRole: string, input: CreateArtifactInput): ArtifactRecord {
@@ -475,6 +514,14 @@ export class AgentCorpBroker extends EventEmitter {
       "INVALID_ARTIFACT",
       "Provide exactly one of content or contentUri",
     );
+    if (input.content !== undefined) {
+      const contentBytes = Buffer.byteLength(input.content, "utf8");
+      invariant(
+        contentBytes <= this.maxArtifactSizeBytes,
+        "ARTIFACT_TOO_LARGE",
+        `Artifact content size (${contentBytes} bytes) exceeds maximum allowed size of ${this.maxArtifactSizeBytes} bytes`,
+      );
+    }
     if (input.relatedTaskId) {
       const task = this.database.getTask(input.relatedTaskId);
       invariant(task, "TASK_NOT_FOUND", `Task not found: ${input.relatedTaskId}`);
@@ -508,15 +555,22 @@ export class AgentCorpBroker extends EventEmitter {
     return artifact;
   }
 
-  listArtifacts(callerRole: string, taskId?: string): ArtifactRecord[] {
+  listArtifactsPaginated(callerRole: string, taskId?: string, options?: PaginationOptions): PaginatedResult<ArtifactRecord> {
     this.role(callerRole);
     if (taskId) {
       const task = this.database.getTask(taskId);
       invariant(task, "TASK_NOT_FOUND", `Task not found: ${taskId}`);
       this.assertTaskParticipant(task, callerRole);
     }
-    return this.database.listArtifacts(taskId ?? null)
-      .filter((artifact) => this.canSeeArtifact(artifact, callerRole));
+    const result = this.database.listArtifactsPaginated(taskId ?? null, options);
+    return {
+      items: result.items.filter((artifact) => this.canSeeArtifact(artifact, callerRole)),
+      nextCursor: result.nextCursor,
+    };
+  }
+
+  listArtifacts(callerRole: string, taskId?: string, options?: PaginationOptions): ArtifactRecord[] {
+    return this.listArtifactsPaginated(callerRole, taskId, options).items;
   }
 
   getArtifact(callerRole: string, artifactId: string): ArtifactRecord {
@@ -778,6 +832,18 @@ export class AgentCorpBroker extends EventEmitter {
     this.database.resolveTransition(transitionId, "approved", timestamp);
     this.database.updateTaskStatus(task.taskId, "assigned", timestamp);
     return this.database.getTask(task.taskId);
+  }
+
+  prune(options: PruneOptions): PruneResult {
+    const result = this.database.pruneHistory(options);
+    if (!result.dryRun) {
+      this.emitDomainEvent("history_pruned", result);
+    }
+    return result;
+  }
+
+  checkpointAndCompact(): { checkpoint: string; vacuumed: boolean } {
+    return this.database.checkpointAndCompact();
   }
 
   private canSeeArtifact(artifact: ArtifactRecord, roleId: string): boolean {

@@ -14,14 +14,14 @@ describe("migrations", () => {
     try {
       expect(getCurrentSchemaVersion(rawDb)).toBe(0);
       const result = runMigrations(rawDb);
-      expect(result.applied).toEqual([1, 2]);
-      expect(result.currentVersion).toBe(2);
-      expect(getCurrentSchemaVersion(rawDb)).toBe(2);
+      expect(result.applied).toEqual([1, 2, 3]);
+      expect(result.currentVersion).toBe(3);
+      expect(getCurrentSchemaVersion(rawDb)).toBe(3);
 
       // Re-running migrations is idempotent
       const rerun = runMigrations(rawDb);
       expect(rerun.applied).toEqual([]);
-      expect(rerun.currentVersion).toBe(2);
+      expect(rerun.currentVersion).toBe(3);
     } finally {
       rawDb.close();
     }
@@ -44,7 +44,7 @@ describe("migrations", () => {
   it("initializes schema properly via AgentCorpDatabase", () => {
     const db = new AgentCorpDatabase(":memory:");
     try {
-      expect(db.getSchemaVersion()).toBe(2);
+      expect(db.getSchemaVersion()).toBe(3);
       expect(db.listAllTasks()).toEqual([]);
       expect(db.listAllMessages()).toEqual([]);
       expect(db.listAllApprovals()).toEqual([]);
@@ -67,8 +67,8 @@ describe("migrations", () => {
 
       // Run migrations; ensureMigrationTable must detect missing name column and alter it safely
       const result = runMigrations(rawDb);
-      expect(result.applied).toEqual([1, 2]);
-      expect(result.currentVersion).toBe(2);
+      expect(result.applied).toEqual([1, 2, 3]);
+      expect(result.currentVersion).toBe(3);
 
       const cols = rawDb.prepare("PRAGMA table_info(schema_migrations)").all() as Array<{ name: string }>;
       expect(cols.some((c) => c.name === "name")).toBe(true);
@@ -110,4 +110,23 @@ describe("migrations", () => {
       rawDb.close();
     }
   });
+
+  it("migration 3 creates pagination and performance indexes", () => {
+    const rawDb = new DatabaseSync(":memory:");
+    try {
+      MIGRATIONS[0]!.up(rawDb);
+      MIGRATIONS[1]!.up(rawDb);
+      MIGRATIONS[2]!.up(rawDb);
+
+      const indexes = rawDb.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>;
+      const indexNames = indexes.map((i) => i.name);
+      expect(indexNames).toContain("idx_tasks_updated_at");
+      expect(indexNames).toContain("idx_tasks_created_at");
+      expect(indexNames).toContain("idx_messages_created_at");
+      expect(indexNames).toContain("idx_artifacts_created_at");
+    } finally {
+      rawDb.close();
+    }
+  });
 });
+

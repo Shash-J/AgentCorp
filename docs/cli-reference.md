@@ -110,3 +110,20 @@ Generates human-readable Markdown (`coord/audit.md`) and structured JSON (`coord
 
 * **Options**:
   * `--out <dir>`: Output directory (default: `coord`).
+  * `--limit <number>`: Limit the number of exported items per category (most recent).
+  * `--since <iso-date>`: Only include records created or updated since the specified ISO timestamp.
+
+---
+
+## 6. Storage Maintenance & Bounding
+
+### `agentcorp prune`
+Prunes terminal, resolved history (completed/failed/cancelled tasks, associated messages, events, and resolved approvals) older than a specified retention threshold. Active tasks and pending approvals are always preserved.
+
+* **Options**:
+  * `--older-than <days>`: Age threshold in days for terminal records to prune (default: `30`).
+  * `--dry-run`: Reports the count of eligible records without modifying or deleting database rows.
+  * `--compact`: Automatically runs a SQLite WAL checkpoint (`TRUNCATE`) and `VACUUM` after successful pruning.
+
+### `agentcorp compact`
+Executes an immediate SQLite WAL checkpoint (`PRAGMA wal_checkpoint(TRUNCATE)`) and compaction (`VACUUM`) to reclaim disk space from pruned records and truncate write-ahead logs.

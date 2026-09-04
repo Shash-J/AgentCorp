@@ -43,14 +43,21 @@ export interface DaemonInfo {
   startedAt: string;
 }
 
+export const DEFAULT_MAX_BODY_SIZE_BYTES = 2 * 1024 * 1024; // 2 MB
+
 export interface ServerOptions {
   port?: number;
   host?: string;
   daemonFilePath?: string;
   auditOnShutdown?: boolean;
+  maxBodySizeBytes?: number;
 }
 
-async function nodeRequestToWebRequest(req: IncomingMessage, url: URL): Promise<Request> {
+async function nodeRequestToWebRequest(
+  req: IncomingMessage,
+  url: URL,
+  maxBodySizeBytes = DEFAULT_MAX_BODY_SIZE_BYTES,
+): Promise<Request> {
   const headers = new Headers();
   for (const [key, value] of Object.entries(req.headers)) {
     if (value !== undefined) {
@@ -63,8 +70,14 @@ async function nodeRequestToWebRequest(req: IncomingMessage, url: URL): Promise<
   }
 
   const chunks: Buffer[] = [];
+  let receivedBytes = 0;
   for await (const chunk of req) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+    const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    receivedBytes += buf.length;
+    if (receivedBytes > maxBodySizeBytes) {
+      throw new AgentCorpError("PAYLOAD_TOO_LARGE", `Request body exceeds maximum size of ${maxBodySizeBytes} bytes`);
+    }
+    chunks.push(buf);
   }
   const body = ["GET", "HEAD"].includes(req.method ?? "GET") ? null : (chunks.length > 0 ? Buffer.concat(chunks) : null);
 
@@ -105,6 +118,7 @@ export class AgentCorpServer {
   readonly config: OrgConfig;
   readonly credentials: CredentialsFile;
   readonly daemonFilePath: string;
+  readonly maxBodySizeBytes: number;
   private server: Server | null = null;
   private readonly roleHandlers = new Map<string, ReturnType<typeof createMcpHandler>>();
   private readonly sseClients = new Set<ServerResponse>();
@@ -126,6 +140,7 @@ export class AgentCorpServer {
     this.credentials = credentials ?? ensureCredentials(this.config);
     this.daemonFilePath = resolve(options.daemonFilePath ?? ".agentcorp/daemon.json");
     this.auditOnShutdown = options.auditOnShutdown ?? true;
+    this.maxBodySizeBytes = options.maxBodySizeBytes ?? DEFAULT_MAX_BODY_SIZE_BYTES;
     if (options.port !== undefined) this.port = options.port;
     if (options.host !== undefined) this.host = options.host;
     this.broker.on("event", this.eventListener);
@@ -301,7 +316,7 @@ export class AgentCorpServer {
         }
 
         const roleHandler = this.getRoleHandler(caller.roleId);
-        const webReq = await nodeRequestToWebRequest(req, url);
+        const webReq = await nodeRequestToWebRequest(req, url, this.maxBodySizeBytes);
         const webRes = await roleHandler.fetch(webReq);
         await sendWebResponseToNode(webRes, res);
         return;
@@ -352,14 +367,25 @@ export class AgentCorpServer {
 
       this.sendJson(res, 404, { error: "NOT_FOUND", message: "Endpoint not found" });
     } catch (error) {
+      const isTooLarge = error instanceof AgentCorpError && error.code === "PAYLOAD_TOO_LARGE";
+      const status = isTooLarge ? 413 : 500;
+      const code = error instanceof AgentCorpError ? error.code : "INTERNAL_ERROR";
       const message = error instanceof Error ? error.message : String(error);
-      this.sendJson(res, 500, { error: "INTERNAL_ERROR", message });
+      this.sendJson(res, status, { error: code, message });
     }
   }
 
   private async handleAdminApi(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const path = url.pathname;
     const method = req.method ?? "GET";
+
+    const limitParam = url.searchParams.get("limit");
+    const cursorParam = url.searchParams.get("cursor");
+    const envelope = url.searchParams.get("envelope") === "true";
+    const paginationOpts = {
+      ...(limitParam ? { limit: parseInt(limitParam, 10) } : {}),
+      ...(cursorParam ? { cursor: cursorParam } : {}),
+    };
 
     if (path === "/api/events" && method === "GET") {
       res.writeHead(200, {
@@ -377,7 +403,9 @@ export class AgentCorpServer {
     }
 
     if (path === "/api/approvals" && method === "GET") {
-      this.sendJson(res, 200, this.broker.listPendingApprovals());
+      const paginated = this.database.listPendingApprovalsPaginated(paginationOpts);
+      if (paginated.nextCursor) res.setHeader("X-Next-Cursor", paginated.nextCursor);
+      this.sendJson(res, 200, envelope ? paginated : paginated.items);
       return;
     }
 
@@ -421,7 +449,10 @@ export class AgentCorpServer {
     }
 
     if (path === "/api/artifacts" && method === "GET") {
-      this.sendJson(res, 200, this.database.listArtifacts(null));
+      const taskId = url.searchParams.get("taskId");
+      const paginated = this.database.listArtifactsPaginated(taskId, paginationOpts);
+      if (paginated.nextCursor) res.setHeader("X-Next-Cursor", paginated.nextCursor);
+      this.sendJson(res, 200, envelope ? paginated : paginated.items);
       return;
     }
 
@@ -438,8 +469,11 @@ export class AgentCorpServer {
     }
 
     if (path === "/api/audit/export" && method === "POST") {
-      const body = await this.readJsonBody<{ outputDir?: string }>(req);
-      const result = exportAuditTrail(this.broker, body.outputDir ?? "coord");
+      const body = await this.readJsonBody<{ outputDir?: string; limit?: number; since?: string }>(req);
+      const result = exportAuditTrail(this.broker, body.outputDir ?? "coord", {
+        limit: body.limit,
+        since: body.since,
+      });
       this.sendJson(res, 200, {
         exported: true,
         markdownPath: result.markdownPath,
@@ -449,12 +483,32 @@ export class AgentCorpServer {
     }
 
     if (path === "/api/tasks" && method === "GET") {
-      this.sendJson(res, 200, this.database.listAllTasks());
+      const paginated = this.database.listAllTasksPaginated(paginationOpts);
+      if (paginated.nextCursor) res.setHeader("X-Next-Cursor", paginated.nextCursor);
+      this.sendJson(res, 200, envelope ? paginated : paginated.items);
       return;
     }
 
     if (path === "/api/messages" && method === "GET") {
-      this.sendJson(res, 200, this.database.listAllMessages());
+      const paginated = this.database.listAllMessagesPaginated(paginationOpts);
+      if (paginated.nextCursor) res.setHeader("X-Next-Cursor", paginated.nextCursor);
+      this.sendJson(res, 200, envelope ? paginated : paginated.items);
+      return;
+    }
+
+    if (path === "/api/maintenance/prune" && method === "POST") {
+      const body = await this.readJsonBody<{ olderThanDays?: number; dryRun?: boolean }>(req);
+      const result = this.broker.prune({
+        olderThanDays: body.olderThanDays ?? 30,
+        dryRun: body.dryRun ?? false,
+      });
+      this.sendJson(res, 200, result);
+      return;
+    }
+
+    if (path === "/api/maintenance/compact" && method === "POST") {
+      const result = this.broker.checkpointAndCompact();
+      this.sendJson(res, 200, result);
       return;
     }
 
@@ -471,8 +525,14 @@ export class AgentCorpServer {
 
   private async readJsonBody<T>(req: IncomingMessage): Promise<T> {
     const chunks: Buffer[] = [];
+    let receivedBytes = 0;
     for await (const chunk of req) {
-      chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+      const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+      receivedBytes += buf.length;
+      if (receivedBytes > this.maxBodySizeBytes) {
+        throw new AgentCorpError("PAYLOAD_TOO_LARGE", `Request body exceeds maximum size of ${this.maxBodySizeBytes} bytes`);
+      }
+      chunks.push(buf);
     }
     if (chunks.length === 0) return {} as T;
     return JSON.parse(Buffer.concat(chunks).toString("utf8")) as T;

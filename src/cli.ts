@@ -170,6 +170,21 @@ async function getAdminClient(options: GlobalOptions) {
               headers,
             })
           ).json(),
+        prune: async (olderThanDays: number, dryRun?: boolean) =>
+          await (
+            await fetch(`${daemonInfo.url}/api/maintenance/prune`, {
+              method: "POST",
+              headers,
+              body: JSON.stringify({ olderThanDays, dryRun }),
+            })
+          ).json(),
+        compact: async () =>
+          await (
+            await fetch(`${daemonInfo.url}/api/maintenance/compact`, {
+              method: "POST",
+              headers,
+            })
+          ).json(),
         close: () => {},
       };
     }
@@ -184,6 +199,10 @@ async function getAdminClient(options: GlobalOptions) {
     listPolicies: async () => broker.listPolicies(),
     savePolicy: async (rule: unknown) => broker.savePolicy(rule as never),
     setPolicyEnabled: async (id: string, enabled: boolean) => broker.setPolicyEnabled(id, enabled),
+    prune: async (olderThanDays: number, dryRun?: boolean) =>
+      broker.prune({ olderThanDays, dryRun }),
+    compact: async () =>
+      broker.checkpointAndCompact(),
     close: () => db.close(),
   };
 }
@@ -582,10 +601,15 @@ audit
   .command("export")
   .description("Export human-readable Markdown and JSON audit trail to /coord")
   .option("--out <dir>", "output directory", "coord")
-  .action((options: { out: string }) => {
+  .option("--limit <number>", "limit exported entries per category")
+  .option("--since <iso-date>", "only export entries created/updated since ISO timestamp")
+  .action((options: { out: string; limit?: string; since?: string }) => {
     const { broker, db } = openBroker(program.opts<GlobalOptions>());
     try {
-      const result = exportAuditTrail(broker, options.out);
+      const result = exportAuditTrail(broker, options.out, {
+        limit: options.limit ? parseInt(options.limit, 10) : undefined,
+        since: options.since,
+      });
       output({
         exported: true,
         markdownPath: result.markdownPath,
@@ -593,6 +617,42 @@ audit
       });
     } finally {
       db.close();
+    }
+  });
+
+program
+  .command("prune")
+  .description("Prune resolved history older than specified days")
+  .option("--older-than <days>", "age in days of resolved tasks/messages to prune", "30")
+  .option("--dry-run", "simulate prune without deleting records")
+  .option("--compact", "run WAL checkpoint and VACUUM after pruning")
+  .action(async (options: { olderThan: string; dryRun?: boolean; compact?: boolean }) => {
+    const admin = await getAdminClient(program.opts<GlobalOptions>());
+    try {
+      const olderThanDays = parseInt(options.olderThan, 10);
+      const pruneResult = await admin.prune(olderThanDays, options.dryRun);
+      let compactResult: unknown = undefined;
+      if (options.compact && !options.dryRun) {
+        compactResult = await admin.compact();
+      }
+      output({
+        ...pruneResult,
+        ...(compactResult ? { compact: compactResult } : {}),
+      });
+    } finally {
+      admin.close();
+    }
+  });
+
+program
+  .command("compact")
+  .description("Run SQLite WAL checkpoint (TRUNCATE) and VACUUM to reclaim disk space")
+  .action(async () => {
+    const admin = await getAdminClient(program.opts<GlobalOptions>());
+    try {
+      output(await admin.compact());
+    } finally {
+      admin.close();
     }
   });
 

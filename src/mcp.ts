@@ -87,9 +87,16 @@ export function createMcpServer(
     {
       title: "List visible tasks",
       description: "List tasks in which the bound role participates.",
-      inputSchema: z.object({}),
+      inputSchema: z.object({
+        limit: z.number().int().positive().max(200).optional(),
+        cursor: z.string().optional(),
+        envelope: z.boolean().optional(),
+      }),
     },
-    () => guarded(() => broker.listTasks(callerRole)),
+    (input) => guarded(() => {
+      if (input?.envelope) return broker.listTasksPaginated(callerRole, input);
+      return broker.listTasks(callerRole, input);
+    }),
   );
 
   server.registerTool(
@@ -133,9 +140,16 @@ export function createMcpServer(
     {
       title: "Read delivered messages",
       description: "Return only approved or delivered messages addressed to the bound role.",
-      inputSchema: z.object({}),
+      inputSchema: z.object({
+        limit: z.number().int().positive().max(200).optional(),
+        cursor: z.string().optional(),
+        envelope: z.boolean().optional(),
+      }),
     },
-    () => guarded(() => broker.getInbox(callerRole)),
+    (input) => guarded(() => {
+      if (input?.envelope) return broker.getInboxPaginated(callerRole, input);
+      return broker.getInbox(callerRole, input);
+    }),
   );
 
   server.registerTool(
@@ -163,9 +177,17 @@ export function createMcpServer(
     {
       title: "Read a task thread",
       description: "Return the task message history visible to the bound role.",
-      inputSchema: z.object({ task_id: z.string().min(1) }),
+      inputSchema: z.object({
+        task_id: z.string().min(1),
+        limit: z.number().int().positive().max(200).optional(),
+        cursor: z.string().optional(),
+        envelope: z.boolean().optional(),
+      }),
     },
-    ({ task_id }) => guarded(() => broker.getThread(callerRole, task_id)),
+    (input) => guarded(() => {
+      if (input.envelope) return broker.getThreadPaginated(callerRole, input.task_id, input);
+      return broker.getThread(callerRole, input.task_id, input);
+    }),
   );
 
   server.registerTool(
@@ -197,9 +219,17 @@ export function createMcpServer(
     {
       title: "List visible artifacts",
       description: "List artifact metadata after applying the bound role's visibility rules.",
-      inputSchema: z.object({ task_id: z.string().optional() }),
+      inputSchema: z.object({
+        task_id: z.string().optional(),
+        limit: z.number().int().positive().max(200).optional(),
+        cursor: z.string().optional(),
+        envelope: z.boolean().optional(),
+      }),
     },
-    ({ task_id }) => guarded(() => broker.listArtifacts(callerRole, task_id)),
+    (input) => guarded(() => {
+      if (input?.envelope) return broker.listArtifactsPaginated(callerRole, input?.task_id, input);
+      return broker.listArtifacts(callerRole, input?.task_id, input);
+    }),
   );
 
   server.registerTool(

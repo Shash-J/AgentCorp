@@ -60,10 +60,13 @@ Creates a new coordinated task in the broker.
   ```
 
 ### `list_tasks`
-Lists all visible tasks where the caller's role participates. A proposed task is not visible to its intended assignee until an approved proposal activates the assignment.
+Lists visible tasks where the caller's role participates. A proposed task is not visible to its intended assignee until an approved proposal activates the assignment.
 
-* **Inputs**: None (`{}`)
-* **Returns**: Array of `TaskRecord` objects.
+* **Inputs**:
+  * `limit` *(integer, optional)*: Maximum number of tasks to return (default: `50`, max: `200`).
+  * `cursor` *(string, optional)*: Cursor from a previous page's `nextCursor`.
+  * `envelope` *(boolean, optional)*: If `true`, returns `{ items: [...], nextCursor: string | null }`. If omitted or `false`, returns the array of tasks directly for backward compatibility.
+* **Returns**: Array of `TaskRecord` objects (or paginated envelope if `envelope: true`).
 
 ### `get_work_queue`
 Returns the bound role's complete actionable coordination state in one call.
@@ -98,7 +101,7 @@ Submits a typed message through recipient validation and the policy engine.
     * `"review"`: Architectural or code review.
     * `"verdict"`: Formal review verdict (`go`, `no_go`, `changes_requested`).
     * `"status_update"`: Execution milestone update.
-  * `payload` *(unknown / JSON object, required)*: Structured message payload.
+  * `payload` *(unknown / JSON object, required)*: Structured message payload (maximum size: 1 MB by default; exceeds return `PAYLOAD_TOO_LARGE`).
   * `task_id` *(string, optional)*: Associated task ID.
   * `references` *(array of strings, optional)*: Referenced artifact IDs or URIs.
   * `risk_tags` *(array of strings, optional)*: Tags indicating risk category (e.g. `["read_only"]`).
@@ -124,8 +127,11 @@ Submits a typed message through recipient validation and the policy engine.
 ### `get_inbox`
 Retrieves delivered and approved messages addressed to the bound role. Messages held in `pending_approval` are not visible to the recipient until approved.
 
-* **Inputs**: None (`{}`)
-* **Returns**: Array of unread `MessageRecord` objects with `status: "delivered"` or `"approved"`. Acknowledged messages remain in task history but leave the inbox.
+* **Inputs**:
+  * `limit` *(integer, optional)*: Maximum number of messages to return (default: `50`, max: `200`).
+  * `cursor` *(string, optional)*: Cursor from a previous page's `nextCursor`.
+  * `envelope` *(boolean, optional)*: If `true`, returns `{ items: [...], nextCursor: string | null }`. If omitted or `false`, returns the array directly.
+* **Returns**: Array of unread `MessageRecord` objects with `status: "delivered"` or `"approved"` (or envelope if requested). Acknowledged messages remain in task history but leave the inbox.
 
 ### `acknowledge_message`
 Marks a delivered message as acknowledged by its recipient.
@@ -149,7 +155,10 @@ Retrieves the complete message history for a given task visible to the caller's 
 
 * **Inputs**:
   * `task_id` *(string, required)*: Associated task ID.
-* **Returns**: Ordered chronological array of `MessageRecord` objects.
+  * `limit` *(integer, optional)*: Maximum number of messages to return (default: `50`, max: `200`).
+  * `cursor` *(string, optional)*: Cursor from a previous page's `nextCursor`.
+  * `envelope` *(boolean, optional)*: If `true`, returns `{ items: [...], nextCursor: string | null }`. If omitted or `false`, returns the array directly.
+* **Returns**: Ordered chronological array of `MessageRecord` objects (or envelope if requested).
 
 ---
 
@@ -161,7 +170,7 @@ Publishes an immutable, SHA-256 content-addressed artifact with role-based visib
 * **Inputs**:
   * `type` *(string, required)*: Artifact type (`spec`, `review`, `resolution`, `code_diff`, `report`).
   * `name` *(string, required)*: Human-readable display filename.
-  * `content` *(string, optional)*: Inline text content (markdown, JSON, code).
+  * `content` *(string, optional)*: Inline text content (maximum size: 5 MB by default; exceeds return `ARTIFACT_TOO_LARGE`).
   * `content_uri` *(string, optional)*: External storage reference (e.g. `file://...` or `s3://...`).
   * `visible_to_roles` *(array of strings or "all", optional)*: Permitted roles. Defaults to role's `artifact_visibility`.
   * `related_task_id` *(string, optional)*: Task ID to associate with this artifact.
@@ -184,7 +193,10 @@ Lists artifact metadata visible to the caller's role. Content is omitted from li
 
 * **Inputs**:
   * `task_id` *(string, optional)*: Filter by associated task ID.
-* **Returns**: Array of `ArtifactRecord` metadata objects.
+  * `limit` *(integer, optional)*: Maximum number of artifacts to return (default: `50`, max: `200`).
+  * `cursor` *(string, optional)*: Cursor from a previous page's `nextCursor`.
+  * `envelope` *(boolean, optional)*: If `true`, returns `{ items: [...], nextCursor: string | null }`. If omitted or `false`, returns the array directly.
+* **Returns**: Array of `ArtifactRecord` metadata objects (or envelope if requested).
 
 ### `get_artifact`
 Fetches complete artifact content and metadata after verifying that the caller's role is in the artifact's allowed visibility list.

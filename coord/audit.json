@@ -1,27 +1,21 @@
 {
-  "exportedAt": "2026-09-04T21:06:00.699Z",
-  "company": "My Agent Company",
+  "exportedAt": "2026-09-04T22:01:15.003Z",
+  "company": "Bounding Test Corp",
   "roles": [
     {
       "id": "architect",
-      "model": "openai/codex",
       "capabilities": [
         "propose_plan",
-        "review",
-        "approve_merge"
+        "review"
       ],
       "allowedPeers": [
         "developer"
-      ],
-      "boundAgent": "architect-daemon"
+      ]
     },
     {
       "id": "developer",
-      "model": "any/mcp-capable-agent",
       "capabilities": [
-        "write_code",
-        "run_tests",
-        "report"
+        "write_code"
       ],
       "allowedPeers": [
         "architect"
@@ -30,253 +24,47 @@
   ],
   "tasks": [
     {
-      "taskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
-      "title": "Review Gemini's complete AgentCorp implementation",
-      "description": "Architect will audit the full codebase, run verification, identify release blockers and improvements, then send an evidence-backed review to the developer role.",
+      "taskId": "task_1",
+      "title": "Task 1",
+      "description": null,
       "createdBy": "architect",
       "assignedTo": "developer",
-      "status": "in_progress",
-      "createdAt": "2026-09-04T19:35:33.585Z",
-      "updatedAt": "2026-09-04T19:38:43.452Z"
+      "status": "assigned",
+      "createdAt": "2026-09-01T00:00:01Z",
+      "updatedAt": "2026-09-01T00:00:01Z"
+    },
+    {
+      "taskId": "task_2",
+      "title": "Task 2",
+      "description": null,
+      "createdBy": "architect",
+      "assignedTo": "developer",
+      "status": "assigned",
+      "createdAt": "2026-09-01T00:00:02Z",
+      "updatedAt": "2026-09-01T00:00:02Z"
+    },
+    {
+      "taskId": "task_3",
+      "title": "Task 3",
+      "description": null,
+      "createdBy": "architect",
+      "assignedTo": "developer",
+      "status": "assigned",
+      "createdAt": "2026-09-01T00:00:03Z",
+      "updatedAt": "2026-09-01T00:00:03Z"
+    },
+    {
+      "taskId": "task_4",
+      "title": "Task 4",
+      "description": null,
+      "createdBy": "architect",
+      "assignedTo": "developer",
+      "status": "assigned",
+      "createdAt": "2026-09-01T00:00:04Z",
+      "updatedAt": "2026-09-01T00:00:04Z"
     }
   ],
-  "messages": [
-    {
-      "messageId": "msg_6cd715f7-df10-43ae-a90e-51f9e5d6f0d3",
-      "taskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
-      "fromRole": "architect",
-      "toRole": "developer",
-      "type": "status_update",
-      "payload": {
-        "phase": "review_started",
-        "scope": [
-          "architecture",
-          "security",
-          "correctness",
-          "DX",
-          "open-source readiness",
-          "MCP dogfooding"
-        ],
-        "requested_action": "Stand by for the final review and be prepared to address release blockers."
-      },
-      "references": [],
-      "inReplyTo": null,
-      "status": "delivered",
-      "riskTags": [
-        "read_only"
-      ],
-      "createdAt": "2026-09-04T19:35:38.025Z",
-      "resolvedAt": "2026-09-04T19:35:38.025Z"
-    },
-    {
-      "messageId": "msg_c77e1183-552c-44e0-9194-7f1d1066b099",
-      "taskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
-      "fromRole": "architect",
-      "toRole": "developer",
-      "type": "review",
-      "payload": {
-        "verdict": "changes_requested",
-        "summary": "Strong milestone and healthy happy path, but not ready to publish. Fix AC-001 through AC-004 before release.",
-        "release_blockers": [
-          "AC-001: TUI maps auth/network failures to an empty approval queue and can falsely report All clear.",
-          "AC-002: Terminal reviewers cannot see the actual message payload they approve.",
-          "AC-003: Stored XSS plus URL/localStorage bearer tokens can bypass human approval.",
-          "AC-004: Databases created by v0.1 fail the new migration bootstrap."
-        ],
-        "artifact_id": "art_f5afa86e-d3b2-4bb4-bc85-b503d771db3f",
-        "requested_response": "Acknowledge the review, propose a fix sequence, and implement the four blockers with negative-path tests before addressing the high-priority backlog."
-      },
-      "references": [
-        "art_f5afa86e-d3b2-4bb4-bc85-b503d771db3f"
-      ],
-      "inReplyTo": "msg_6cd715f7-df10-43ae-a90e-51f9e5d6f0d3",
-      "status": "acknowledged",
-      "riskTags": [
-        "read_only"
-      ],
-      "createdAt": "2026-09-04T19:40:51.214Z",
-      "resolvedAt": "2026-09-04T19:57:37.617Z"
-    },
-    {
-      "messageId": "msg_50d5d8c4-b06a-4a55-9d65-2fd7d25d8fe8",
-      "taskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
-      "fromRole": "developer",
-      "toRole": "architect",
-      "type": "status_update",
-      "payload": {
-        "verdict": "blockers_resolved",
-        "summary": "All four release blockers (AC-001 through AC-004) have been resolved and verified with 31/31 unit and negative-path tests.",
-        "artifact_id": "art_809083a9-f96f-40fd-b98a-0a4ba8d6b2c4",
-        "next_step": "Requesting human approval to finalize release candidate."
-      },
-      "references": [
-        "art_809083a9-f96f-40fd-b98a-0a4ba8d6b2c4"
-      ],
-      "inReplyTo": "msg_c77e1183-552c-44e0-9194-7f1d1066b099",
-      "status": "acknowledged",
-      "riskTags": [
-        "read_only"
-      ],
-      "createdAt": "2026-09-04T19:57:37.669Z",
-      "resolvedAt": "2026-09-04T20:45:09.311Z"
-    },
-    {
-      "messageId": "msg_d89dd53d-dcfb-40e9-886e-2472ccc7aec6",
-      "taskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
-      "fromRole": "developer",
-      "toRole": "architect",
-      "type": "proposal",
-      "payload": {
-        "action": "prepare_release_candidate",
-        "version": "0.1.0",
-        "proposal": "Merge resolution of AC-001..AC-004 into main branch and tag v0.1.0-rc1.",
-        "git_branch": "main"
-      },
-      "references": [
-        "art_809083a9-f96f-40fd-b98a-0a4ba8d6b2c4"
-      ],
-      "inReplyTo": null,
-      "status": "acknowledged",
-      "riskTags": [],
-      "createdAt": "2026-09-04T19:57:37.687Z",
-      "resolvedAt": "2026-09-04T20:34:27.586Z"
-    },
-    {
-      "messageId": "msg_bf40f857-d895-450d-890b-c454275cd9e4",
-      "taskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
-      "fromRole": "architect",
-      "toRole": "developer",
-      "type": "verdict",
-      "payload": {
-        "verdict": "no_go_public_release",
-        "summary": "AC-001, AC-002 and AC-004 verify; AC-003 remains open. Additional release blockers: policy bypass via self-declared read_only, missing CLI shebang, and inconsistent/unprepared release identity/docs/CI.",
-        "required_blockers": [
-          "AC-003",
-          "AC-005",
-          "AC-006",
-          "AC-007"
-        ],
-        "artifact_id": "art_800eb174-8fc0-4917-b441-472e8b00504d"
-      },
-      "references": [
-        "art_800eb174-8fc0-4917-b441-472e8b00504d"
-      ],
-      "inReplyTo": "msg_50d5d8c4-b06a-4a55-9d65-2fd7d25d8fe8",
-      "status": "acknowledged",
-      "riskTags": [
-        "read_only"
-      ],
-      "createdAt": "2026-09-04T20:48:29.767Z",
-      "resolvedAt": "2026-09-04T21:05:51.022Z"
-    },
-    {
-      "messageId": "msg_61da9990-2433-4164-9966-bcc506173613",
-      "taskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
-      "fromRole": "developer",
-      "toRole": "architect",
-      "type": "report",
-      "payload": {
-        "verdict": "blockers_resolved",
-        "summary": "All four release blockers (AC-003, AC-005, AC-006, AC-007) have been resolved, verified with 38 tests, and confirmed via clean-environment packed tarball install.",
-        "version": "0.1.0-alpha.1",
-        "artifact_id": "art_167d7129-88ac-4eac-b707-7a3990519b48",
-        "clean_environment_smoke_test": "passed",
-        "tarball": "agentcorp-broker-0.1.0-alpha.1.tgz",
-        "status": "ready_for_alpha_release"
-      },
-      "references": [
-        "art_167d7129-88ac-4eac-b707-7a3990519b48"
-      ],
-      "inReplyTo": "msg_bf40f857-d895-450d-890b-c454275cd9e4",
-      "status": "delivered",
-      "riskTags": [
-        "read_only"
-      ],
-      "createdAt": "2026-09-04T21:05:51.051Z",
-      "resolvedAt": "2026-09-04T21:05:51.051Z"
-    }
-  ],
-  "approvals": [
-    {
-      "approvalId": "apr_f03798e7-1f09-4dfa-a9b1-366fc60db7d2",
-      "subject": "message",
-      "subjectId": "msg_d89dd53d-dcfb-40e9-886e-2472ccc7aec6",
-      "requestedBy": "developer",
-      "status": "approved",
-      "context": {
-        "fromRole": "developer",
-        "toRole": "architect",
-        "type": "proposal",
-        "payload": {
-          "action": "prepare_release_candidate",
-          "version": "0.1.0",
-          "proposal": "Merge resolution of AC-001..AC-004 into main branch and tag v0.1.0-rc1.",
-          "git_branch": "main"
-        },
-        "taskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
-        "references": [
-          "art_809083a9-f96f-40fd-b98a-0a4ba8d6b2c4"
-        ],
-        "riskTags": [],
-        "matchedRuleId": null
-      },
-      "createdAt": "2026-09-04T19:57:37.687Z",
-      "decidedAt": "2026-09-04T20:33:15.818Z",
-      "decisionNote": "this is testing the first human-in-loop."
-    }
-  ],
-  "artifacts": [
-    {
-      "artifactId": "art_f5afa86e-d3b2-4bb4-bc85-b503d771db3f",
-      "type": "review",
-      "name": "agentcorp-architect-review-2026-09-05.md",
-      "producedBy": "architect",
-      "contentHash": "977b4f5325a4251bf4e2786f61994fcc7a6b1d4c7937e9688b6571f35c3769e4",
-      "visibleToRoles": [
-        "architect",
-        "developer"
-      ],
-      "relatedTaskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
-      "createdAt": "2026-09-04T19:40:43.220Z"
-    },
-    {
-      "artifactId": "art_809083a9-f96f-40fd-b98a-0a4ba8d6b2c4",
-      "type": "resolution",
-      "name": "agentcorp-developer-resolution-2026-09-05.md",
-      "producedBy": "developer",
-      "contentHash": "04d760bbb50c01ee8b96ed6884262008c935b1f577367827073f70329b4f971b",
-      "visibleToRoles": [
-        "architect",
-        "developer"
-      ],
-      "relatedTaskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
-      "createdAt": "2026-09-04T19:57:37.638Z"
-    },
-    {
-      "artifactId": "art_800eb174-8fc0-4917-b441-472e8b00504d",
-      "type": "review",
-      "name": "agentcorp-architect-release-verdict-2026-09-05.md",
-      "producedBy": "architect",
-      "contentHash": "34b525984d986339f990bdbaa69b079be6c443033e2ba0c18e46a912750e0cc7",
-      "visibleToRoles": [
-        "architect",
-        "developer"
-      ],
-      "relatedTaskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
-      "createdAt": "2026-09-04T20:48:29.743Z"
-    },
-    {
-      "artifactId": "art_167d7129-88ac-4eac-b707-7a3990519b48",
-      "type": "resolution",
-      "name": "agentcorp-developer-verdict-resolution-2026-09-05.md",
-      "producedBy": "developer",
-      "contentHash": "e8b584d05a67d46a767c61e1ab94e92a89b7b8ab28dc333c1ac2dbb265a6d14e",
-      "visibleToRoles": [
-        "architect",
-        "developer"
-      ],
-      "relatedTaskId": "task_3272453c-e48a-4575-b24e-8a227853705e",
-      "createdAt": "2026-09-04T21:05:51.036Z"
-    }
-  ]
+  "messages": [],
+  "approvals": [],
+  "artifacts": []
 }

@@ -6,10 +6,41 @@ import type {
   ArtifactRecord,
   InitialPolicy,
   MessageRecord,
+  PaginatedResult,
+  PaginationOptions,
   PendingApproval,
   PolicyRule,
+  PruneOptions,
+  PruneResult,
   TaskRecord,
 } from "./types.js";
+
+export const DEFAULT_PAGE_LIMIT = 50;
+export const MAX_PAGE_LIMIT = 200;
+
+export function encodeCursor(timestamp: string, id: string): string {
+  return Buffer.from(JSON.stringify({ t: timestamp, id })).toString("base64url");
+}
+
+export function decodeCursor(cursor?: string): { timestamp?: string | undefined; id?: string | undefined } | null {
+  if (!cursor) return null;
+  try {
+    const raw = Buffer.from(cursor, cursor.includes("-") || cursor.includes("_") ? "base64url" : "base64").toString("utf8");
+    const parsed = JSON.parse(raw) as { t?: string; id?: string };
+    if (parsed && (parsed.t || parsed.id)) {
+      return { timestamp: parsed.t, id: parsed.id };
+    }
+  } catch {}
+  if (cursor.includes("T") && cursor.includes("Z")) {
+    return { timestamp: cursor };
+  }
+  return { id: cursor };
+}
+
+function parseLimit(limit?: number): number {
+  if (limit === undefined || limit === null || Number.isNaN(limit)) return DEFAULT_PAGE_LIMIT;
+  return Math.min(Math.max(1, Math.floor(limit)), MAX_PAGE_LIMIT);
+}
 
 type Row = Record<string, unknown>;
 
@@ -226,16 +257,58 @@ export class AgentCorpDatabase {
     return row ? mapTask(row) : undefined;
   }
 
-  listTasksForRole(roleId: string): TaskRecord[] {
-    return (this.db.prepare(`
-      SELECT DISTINCT t.* FROM tasks t
-      LEFT JOIN messages m ON m.task_id = t.task_id
-      WHERE t.created_by = ?
-        OR (t.assigned_to = ? AND t.status <> 'proposed')
-        OR m.from_role = ?
-        OR (m.to_role = ? AND m.status IN ('approved', 'delivered', 'acknowledged'))
-      ORDER BY t.updated_at DESC
-    `).all(roleId, roleId, roleId, roleId) as Row[]).map(mapTask);
+  listTasksForRolePaginated(roleId: string, options?: PaginationOptions): PaginatedResult<TaskRecord> {
+    const limit = parseLimit(options?.limit);
+    let cursorTime: string | null = null;
+    let cursorId: string | null = null;
+    const decoded = decodeCursor(options?.cursor);
+    if (decoded) {
+      if (decoded.timestamp) {
+        cursorTime = decoded.timestamp;
+        cursorId = decoded.id ?? "";
+      } else if (decoded.id) {
+        const row = this.db.prepare("SELECT updated_at FROM tasks WHERE task_id = ?").get(decoded.id) as Row | undefined;
+        if (row) {
+          cursorTime = String(row.updated_at);
+          cursorId = decoded.id;
+        }
+      }
+    }
+
+    const rows = (cursorTime !== null && cursorId !== null)
+      ? (this.db.prepare(`
+          SELECT DISTINCT t.* FROM tasks t
+          LEFT JOIN messages m ON m.task_id = t.task_id
+          WHERE (t.created_by = ?
+            OR (t.assigned_to = ? AND t.status <> 'proposed')
+            OR m.from_role = ?
+            OR (m.to_role = ? AND m.status IN ('approved', 'delivered', 'acknowledged')))
+            AND (t.updated_at < ? OR (t.updated_at = ? AND t.task_id < ?))
+          ORDER BY t.updated_at DESC, t.task_id DESC
+          LIMIT ?
+        `).all(roleId, roleId, roleId, roleId, cursorTime, cursorTime, cursorId, limit + 1) as Row[])
+      : (this.db.prepare(`
+          SELECT DISTINCT t.* FROM tasks t
+          LEFT JOIN messages m ON m.task_id = t.task_id
+          WHERE t.created_by = ?
+            OR (t.assigned_to = ? AND t.status <> 'proposed')
+            OR m.from_role = ?
+            OR (m.to_role = ? AND m.status IN ('approved', 'delivered', 'acknowledged'))
+          ORDER BY t.updated_at DESC, t.task_id DESC
+          LIMIT ?
+        `).all(roleId, roleId, roleId, roleId, limit + 1) as Row[]);
+
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const items = pageRows.map(mapTask);
+    const last = items[items.length - 1];
+    const nextCursor = (hasMore && last) ? encodeCursor(last.updatedAt, last.taskId) : null;
+
+    return { items, nextCursor };
+  }
+
+  listTasksForRole(roleId: string, options?: PaginationOptions): TaskRecord[] {
+    return this.listTasksForRolePaginated(roleId, options).items;
   }
 
   updateTaskStatus(taskId: string, status: string, updatedAt: string): void {
@@ -298,25 +371,106 @@ export class AgentCorpDatabase {
     return row ? mapMessage(row) : undefined;
   }
 
-  listInbox(roleId: string): MessageRecord[] {
-    return (this.db.prepare(`
-      SELECT message_id, task_id, from_role, to_role, type, payload,
-             references_json AS "references", in_reply_to, status, risk_tags, created_at, resolved_at
-      FROM messages
-      WHERE to_role = ? AND status IN ('approved', 'delivered')
-      ORDER BY created_at ASC
-    `).all(roleId) as Row[]).map(mapMessage);
+  listInboxPaginated(roleId: string, options?: PaginationOptions): PaginatedResult<MessageRecord> {
+    const limit = parseLimit(options?.limit);
+    let cursorTime: string | null = null;
+    let cursorId: string | null = null;
+    const decoded = decodeCursor(options?.cursor);
+    if (decoded) {
+      if (decoded.timestamp) {
+        cursorTime = decoded.timestamp;
+        cursorId = decoded.id ?? "";
+      } else if (decoded.id) {
+        const row = this.db.prepare("SELECT created_at FROM messages WHERE message_id = ?").get(decoded.id) as Row | undefined;
+        if (row) {
+          cursorTime = String(row.created_at);
+          cursorId = decoded.id;
+        }
+      }
+    }
+
+    const rows = (cursorTime !== null && cursorId !== null)
+      ? (this.db.prepare(`
+          SELECT message_id, task_id, from_role, to_role, type, payload,
+                 references_json AS "references", in_reply_to, status, risk_tags, created_at, resolved_at
+          FROM messages
+          WHERE to_role = ? AND status IN ('approved', 'delivered')
+            AND (created_at > ? OR (created_at = ? AND message_id > ?))
+          ORDER BY created_at ASC, message_id ASC
+          LIMIT ?
+        `).all(roleId, cursorTime, cursorTime, cursorId, limit + 1) as Row[])
+      : (this.db.prepare(`
+          SELECT message_id, task_id, from_role, to_role, type, payload,
+                 references_json AS "references", in_reply_to, status, risk_tags, created_at, resolved_at
+          FROM messages
+          WHERE to_role = ? AND status IN ('approved', 'delivered')
+          ORDER BY created_at ASC, message_id ASC
+          LIMIT ?
+        `).all(roleId, limit + 1) as Row[]);
+
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const items = pageRows.map(mapMessage);
+    const last = items[items.length - 1];
+    const nextCursor = (hasMore && last) ? encodeCursor(last.createdAt, last.messageId) : null;
+
+    return { items, nextCursor };
   }
 
-  listThread(taskId: string, roleId: string): MessageRecord[] {
-    return (this.db.prepare(`
-      SELECT message_id, task_id, from_role, to_role, type, payload,
-             references_json AS "references", in_reply_to, status, risk_tags, created_at, resolved_at
-      FROM messages
-      WHERE task_id = ? AND (from_role = ? OR to_role = ?)
-        AND (from_role = ? OR status IN ('approved', 'delivered', 'acknowledged'))
-      ORDER BY created_at ASC
-    `).all(taskId, roleId, roleId, roleId) as Row[]).map(mapMessage);
+  listInbox(roleId: string, options?: PaginationOptions): MessageRecord[] {
+    return this.listInboxPaginated(roleId, options).items;
+  }
+
+  listThreadPaginated(taskId: string, roleId: string, options?: PaginationOptions): PaginatedResult<MessageRecord> {
+    const limit = parseLimit(options?.limit);
+    let cursorTime: string | null = null;
+    let cursorId: string | null = null;
+    const decoded = decodeCursor(options?.cursor);
+    if (decoded) {
+      if (decoded.timestamp) {
+        cursorTime = decoded.timestamp;
+        cursorId = decoded.id ?? "";
+      } else if (decoded.id) {
+        const row = this.db.prepare("SELECT created_at FROM messages WHERE message_id = ?").get(decoded.id) as Row | undefined;
+        if (row) {
+          cursorTime = String(row.created_at);
+          cursorId = decoded.id;
+        }
+      }
+    }
+
+    const rows = (cursorTime !== null && cursorId !== null)
+      ? (this.db.prepare(`
+          SELECT message_id, task_id, from_role, to_role, type, payload,
+                 references_json AS "references", in_reply_to, status, risk_tags, created_at, resolved_at
+          FROM messages
+          WHERE task_id = ? AND (from_role = ? OR to_role = ?)
+            AND (from_role = ? OR status IN ('approved', 'delivered', 'acknowledged'))
+            AND (created_at > ? OR (created_at = ? AND message_id > ?))
+          ORDER BY created_at ASC, message_id ASC
+          LIMIT ?
+        `).all(taskId, roleId, roleId, roleId, cursorTime, cursorTime, cursorId, limit + 1) as Row[])
+      : (this.db.prepare(`
+          SELECT message_id, task_id, from_role, to_role, type, payload,
+                 references_json AS "references", in_reply_to, status, risk_tags, created_at, resolved_at
+          FROM messages
+          WHERE task_id = ? AND (from_role = ? OR to_role = ?)
+            AND (from_role = ? OR status IN ('approved', 'delivered', 'acknowledged'))
+          ORDER BY created_at ASC, message_id ASC
+          LIMIT ?
+        `).all(taskId, roleId, roleId, roleId, limit + 1) as Row[]);
+
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const items = pageRows.map(mapMessage);
+    const last = items[items.length - 1];
+    const nextCursor = (hasMore && last) ? encodeCursor(last.createdAt, last.messageId) : null;
+
+    return { items, nextCursor };
+  }
+
+  listThread(taskId: string, roleId: string, options?: PaginationOptions): MessageRecord[] {
+    return this.listThreadPaginated(taskId, roleId, options).items;
   }
 
   updateMessage(messageId: string, status: string, resolvedAt: string | null, payload?: unknown): void {
@@ -357,11 +511,66 @@ export class AgentCorpDatabase {
     return row ? mapArtifact(row, includeContent) : undefined;
   }
 
-  listArtifacts(taskId: string | null): ArtifactRecord[] {
-    const rows = taskId
-      ? this.db.prepare("SELECT * FROM artifacts WHERE related_task_id = ? ORDER BY created_at ASC").all(taskId)
-      : this.db.prepare("SELECT * FROM artifacts ORDER BY created_at ASC").all();
-    return (rows as Row[]).map((row) => mapArtifact(row, false));
+  listArtifactsPaginated(taskId: string | null, options?: PaginationOptions): PaginatedResult<ArtifactRecord> {
+    const limit = parseLimit(options?.limit);
+    let cursorTime: string | null = null;
+    let cursorId: string | null = null;
+    const decoded = decodeCursor(options?.cursor);
+    if (decoded) {
+      if (decoded.timestamp) {
+        cursorTime = decoded.timestamp;
+        cursorId = decoded.id ?? "";
+      } else if (decoded.id) {
+        const row = this.db.prepare("SELECT created_at FROM artifacts WHERE artifact_id = ?").get(decoded.id) as Row | undefined;
+        if (row) {
+          cursorTime = String(row.created_at);
+          cursorId = decoded.id;
+        }
+      }
+    }
+
+    let rows: Row[];
+    if (taskId) {
+      rows = (cursorTime !== null && cursorId !== null)
+        ? (this.db.prepare(`
+            SELECT * FROM artifacts
+            WHERE related_task_id = ?
+              AND (created_at > ? OR (created_at = ? AND artifact_id > ?))
+            ORDER BY created_at ASC, artifact_id ASC
+            LIMIT ?
+          `).all(taskId, cursorTime, cursorTime, cursorId, limit + 1) as Row[])
+        : (this.db.prepare(`
+            SELECT * FROM artifacts
+            WHERE related_task_id = ?
+            ORDER BY created_at ASC, artifact_id ASC
+            LIMIT ?
+          `).all(taskId, limit + 1) as Row[]);
+    } else {
+      rows = (cursorTime !== null && cursorId !== null)
+        ? (this.db.prepare(`
+            SELECT * FROM artifacts
+            WHERE (created_at > ? OR (created_at = ? AND artifact_id > ?))
+            ORDER BY created_at ASC, artifact_id ASC
+            LIMIT ?
+          `).all(cursorTime, cursorTime, cursorId, limit + 1) as Row[])
+        : (this.db.prepare(`
+            SELECT * FROM artifacts
+            ORDER BY created_at ASC, artifact_id ASC
+            LIMIT ?
+          `).all(limit + 1) as Row[]);
+    }
+
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const items = pageRows.map((row) => mapArtifact(row, false));
+    const last = items[items.length - 1];
+    const nextCursor = (hasMore && last) ? encodeCursor(last.createdAt, last.artifactId) : null;
+
+    return { items, nextCursor };
+  }
+
+  listArtifacts(taskId: string | null, options?: PaginationOptions): ArtifactRecord[] {
+    return this.listArtifactsPaginated(taskId, options).items;
   }
 
   insertApproval(approval: PendingApproval): void {
@@ -382,9 +591,50 @@ export class AgentCorpDatabase {
     return row ? mapApproval(row) : undefined;
   }
 
-  listPendingApprovals(): PendingApproval[] {
-    return (this.db.prepare("SELECT * FROM approvals WHERE status = 'pending' ORDER BY created_at ASC").all() as Row[])
-      .map(mapApproval);
+  listPendingApprovalsPaginated(options?: PaginationOptions): PaginatedResult<PendingApproval> {
+    const limit = parseLimit(options?.limit);
+    let cursorTime: string | null = null;
+    let cursorId: string | null = null;
+    const decoded = decodeCursor(options?.cursor);
+    if (decoded) {
+      if (decoded.timestamp) {
+        cursorTime = decoded.timestamp;
+        cursorId = decoded.id ?? "";
+      } else if (decoded.id) {
+        const row = this.db.prepare("SELECT created_at FROM approvals WHERE approval_id = ?").get(decoded.id) as Row | undefined;
+        if (row) {
+          cursorTime = String(row.created_at);
+          cursorId = decoded.id;
+        }
+      }
+    }
+
+    const rows = (cursorTime !== null && cursorId !== null)
+      ? (this.db.prepare(`
+          SELECT * FROM approvals
+          WHERE status = 'pending'
+            AND (created_at > ? OR (created_at = ? AND approval_id > ?))
+          ORDER BY created_at ASC, approval_id ASC
+          LIMIT ?
+        `).all(cursorTime, cursorTime, cursorId, limit + 1) as Row[])
+      : (this.db.prepare(`
+          SELECT * FROM approvals
+          WHERE status = 'pending'
+          ORDER BY created_at ASC, approval_id ASC
+          LIMIT ?
+        `).all(limit + 1) as Row[]);
+
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const items = pageRows.map(mapApproval);
+    const last = items[items.length - 1];
+    const nextCursor = (hasMore && last) ? encodeCursor(last.createdAt, last.approvalId) : null;
+
+    return { items, nextCursor };
+  }
+
+  listPendingApprovals(options?: PaginationOptions): PendingApproval[] {
+    return this.listPendingApprovalsPaginated(options).items;
   }
 
   resolveApproval(
@@ -403,21 +653,140 @@ export class AgentCorpDatabase {
     );
   }
 
-  listAllTasks(): TaskRecord[] {
-    return (this.db.prepare("SELECT * FROM tasks ORDER BY created_at ASC").all() as Row[]).map(mapTask);
+  listAllTasksPaginated(options?: PaginationOptions): PaginatedResult<TaskRecord> {
+    const limit = parseLimit(options?.limit);
+    let cursorTime: string | null = null;
+    let cursorId: string | null = null;
+    const decoded = decodeCursor(options?.cursor);
+    if (decoded) {
+      if (decoded.timestamp) {
+        cursorTime = decoded.timestamp;
+        cursorId = decoded.id ?? "";
+      } else if (decoded.id) {
+        const row = this.db.prepare("SELECT created_at FROM tasks WHERE task_id = ?").get(decoded.id) as Row | undefined;
+        if (row) {
+          cursorTime = String(row.created_at);
+          cursorId = decoded.id;
+        }
+      }
+    }
+
+    const rows = (cursorTime !== null && cursorId !== null)
+      ? (this.db.prepare(`
+          SELECT * FROM tasks
+          WHERE (created_at > ? OR (created_at = ? AND task_id > ?))
+          ORDER BY created_at ASC, task_id ASC
+          LIMIT ?
+        `).all(cursorTime, cursorTime, cursorId, limit + 1) as Row[])
+      : (this.db.prepare(`
+          SELECT * FROM tasks
+          ORDER BY created_at ASC, task_id ASC
+          LIMIT ?
+        `).all(limit + 1) as Row[]);
+
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const items = pageRows.map(mapTask);
+    const last = items[items.length - 1];
+    const nextCursor = (hasMore && last) ? encodeCursor(last.createdAt, last.taskId) : null;
+
+    return { items, nextCursor };
   }
 
-  listAllMessages(): MessageRecord[] {
-    return (this.db.prepare(`
-      SELECT message_id, task_id, from_role, to_role, type, payload,
-             references_json AS "references", in_reply_to, status, risk_tags, created_at, resolved_at
-      FROM messages
-      ORDER BY created_at ASC
-    `).all() as Row[]).map(mapMessage);
+  listAllTasks(options?: PaginationOptions): TaskRecord[] {
+    return this.listAllTasksPaginated(options).items;
   }
 
-  listAllApprovals(): PendingApproval[] {
-    return (this.db.prepare("SELECT * FROM approvals ORDER BY created_at ASC").all() as Row[]).map(mapApproval);
+  listAllMessagesPaginated(options?: PaginationOptions): PaginatedResult<MessageRecord> {
+    const limit = parseLimit(options?.limit);
+    let cursorTime: string | null = null;
+    let cursorId: string | null = null;
+    const decoded = decodeCursor(options?.cursor);
+    if (decoded) {
+      if (decoded.timestamp) {
+        cursorTime = decoded.timestamp;
+        cursorId = decoded.id ?? "";
+      } else if (decoded.id) {
+        const row = this.db.prepare("SELECT created_at FROM messages WHERE message_id = ?").get(decoded.id) as Row | undefined;
+        if (row) {
+          cursorTime = String(row.created_at);
+          cursorId = decoded.id;
+        }
+      }
+    }
+
+    const rows = (cursorTime !== null && cursorId !== null)
+      ? (this.db.prepare(`
+          SELECT message_id, task_id, from_role, to_role, type, payload,
+                 references_json AS "references", in_reply_to, status, risk_tags, created_at, resolved_at
+          FROM messages
+          WHERE (created_at > ? OR (created_at = ? AND message_id > ?))
+          ORDER BY created_at ASC, message_id ASC
+          LIMIT ?
+        `).all(cursorTime, cursorTime, cursorId, limit + 1) as Row[])
+      : (this.db.prepare(`
+          SELECT message_id, task_id, from_role, to_role, type, payload,
+                 references_json AS "references", in_reply_to, status, risk_tags, created_at, resolved_at
+          FROM messages
+          ORDER BY created_at ASC, message_id ASC
+          LIMIT ?
+        `).all(limit + 1) as Row[]);
+
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const items = pageRows.map(mapMessage);
+    const last = items[items.length - 1];
+    const nextCursor = (hasMore && last) ? encodeCursor(last.createdAt, last.messageId) : null;
+
+    return { items, nextCursor };
+  }
+
+  listAllMessages(options?: PaginationOptions): MessageRecord[] {
+    return this.listAllMessagesPaginated(options).items;
+  }
+
+  listAllApprovalsPaginated(options?: PaginationOptions): PaginatedResult<PendingApproval> {
+    const limit = parseLimit(options?.limit);
+    let cursorTime: string | null = null;
+    let cursorId: string | null = null;
+    const decoded = decodeCursor(options?.cursor);
+    if (decoded) {
+      if (decoded.timestamp) {
+        cursorTime = decoded.timestamp;
+        cursorId = decoded.id ?? "";
+      } else if (decoded.id) {
+        const row = this.db.prepare("SELECT created_at FROM approvals WHERE approval_id = ?").get(decoded.id) as Row | undefined;
+        if (row) {
+          cursorTime = String(row.created_at);
+          cursorId = decoded.id;
+        }
+      }
+    }
+
+    const rows = (cursorTime !== null && cursorId !== null)
+      ? (this.db.prepare(`
+          SELECT * FROM approvals
+          WHERE (created_at > ? OR (created_at = ? AND approval_id > ?))
+          ORDER BY created_at ASC, approval_id ASC
+          LIMIT ?
+        `).all(cursorTime, cursorTime, cursorId, limit + 1) as Row[])
+      : (this.db.prepare(`
+          SELECT * FROM approvals
+          ORDER BY created_at ASC, approval_id ASC
+          LIMIT ?
+        `).all(limit + 1) as Row[]);
+
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const items = pageRows.map(mapApproval);
+    const last = items[items.length - 1];
+    const nextCursor = (hasMore && last) ? encodeCursor(last.createdAt, last.approvalId) : null;
+
+    return { items, nextCursor };
+  }
+
+  listAllApprovals(options?: PaginationOptions): PendingApproval[] {
+    return this.listAllApprovalsPaginated(options).items;
   }
 
   listAllRoleBindings(): Array<{ roleId: string; agentId: string; capabilities: string[]; connectedAt: string }> {
@@ -427,6 +796,102 @@ export class AgentCorpDatabase {
       capabilities: json<string[]>(row.capabilities),
       connectedAt: String(row.connected_at),
     }));
+  }
+
+  pruneHistory(options: PruneOptions): PruneResult {
+    const olderThanDays = Math.max(0, options.olderThanDays);
+    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+    const dryRun = options.dryRun ?? false;
+
+    // Terminal tasks older than cutoff
+    const eligibleTasks = this.db.prepare(`
+      SELECT task_id FROM tasks
+      WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ?
+    `).all(cutoff) as Array<{ task_id: string }>;
+    const taskIds = eligibleTasks.map((r) => String(r.task_id));
+
+    // Messages belonging to those tasks OR resolved standalone messages older than cutoff
+    let messageIds: string[] = [];
+    if (taskIds.length > 0) {
+      const placeholders = taskIds.map(() => "?").join(",");
+      const msgs = this.db.prepare(`
+        SELECT message_id FROM messages
+        WHERE task_id IN (${placeholders})
+           OR (task_id IS NULL AND resolved_at IS NOT NULL AND resolved_at < ?)
+      `).all(...taskIds, cutoff) as Array<{ message_id: string }>;
+      messageIds = msgs.map((r) => String(r.message_id));
+    } else {
+      const msgs = this.db.prepare(`
+        SELECT message_id FROM messages
+        WHERE task_id IS NULL AND resolved_at IS NOT NULL AND resolved_at < ?
+      `).all(cutoff) as Array<{ message_id: string }>;
+      messageIds = msgs.map((r) => String(r.message_id));
+    }
+
+    // Message events for those messages
+    let eventCount = 0;
+    if (messageIds.length > 0) {
+      const placeholders = messageIds.map(() => "?").join(",");
+      const res = this.db.prepare(`
+        SELECT COUNT(*) as count FROM message_events WHERE message_id IN (${placeholders})
+      `).get(...messageIds) as { count: number };
+      eventCount = Number(res.count);
+    }
+
+    // Task transitions for eligible tasks
+    let transitionCount = 0;
+    if (taskIds.length > 0) {
+      const placeholders = taskIds.map(() => "?").join(",");
+      const res = this.db.prepare(`
+        SELECT COUNT(*) as count FROM task_transitions WHERE task_id IN (${placeholders})
+      `).get(...taskIds) as { count: number };
+      transitionCount = Number(res.count);
+    }
+
+    // Resolved approvals older than cutoff
+    const eligibleApprovals = this.db.prepare(`
+      SELECT approval_id FROM approvals
+      WHERE status IN ('approved', 'rejected') AND decided_at IS NOT NULL AND decided_at < ?
+    `).all(cutoff) as Array<{ approval_id: string }>;
+    const approvalCount = eligibleApprovals.length;
+
+    const result: PruneResult = {
+      dryRun,
+      cutoffDate: cutoff,
+      tasksCount: taskIds.length,
+      messagesCount: messageIds.length,
+      messageEventsCount: eventCount,
+      taskTransitionsCount: transitionCount,
+      approvalsCount: approvalCount,
+    };
+
+    if (!dryRun) {
+      this.transaction(() => {
+        if (messageIds.length > 0) {
+          const placeholders = messageIds.map(() => "?").join(",");
+          this.db.prepare(`DELETE FROM message_events WHERE message_id IN (${placeholders})`).run(...messageIds);
+          this.db.prepare(`DELETE FROM messages WHERE message_id IN (${placeholders})`).run(...messageIds);
+        }
+        if (taskIds.length > 0) {
+          const placeholders = taskIds.map(() => "?").join(",");
+          this.db.prepare(`DELETE FROM task_transitions WHERE task_id IN (${placeholders})`).run(...taskIds);
+          this.db.prepare(`DELETE FROM tasks WHERE task_id IN (${placeholders})`).run(...taskIds);
+        }
+        if (eligibleApprovals.length > 0) {
+          const placeholders = eligibleApprovals.map(() => "?").join(",");
+          const approvalIds = eligibleApprovals.map((r) => String(r.approval_id));
+          this.db.prepare(`DELETE FROM approvals WHERE approval_id IN (${placeholders})`).run(...approvalIds);
+        }
+      });
+    }
+
+    return result;
+  }
+
+  checkpointAndCompact(): { checkpoint: string; vacuumed: boolean } {
+    this.db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    this.db.exec("VACUUM;");
+    return { checkpoint: "TRUNCATE", vacuumed: true };
   }
 }
 

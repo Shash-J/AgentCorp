@@ -168,3 +168,34 @@ export interface PendingApproval {
   decidedAt: string | null;
   decisionNote: string | null;
 }
+
+export interface PaginationOptions {
+  limit?: number | undefined;
+  cursor?: string | undefined;
+}
+
+export interface PaginatedResult<T> {
+  items: T[];
+  nextCursor: string | null;
+  total?: number | undefined;
+}
+
+export interface BrokerLimits {
+  maxPayloadSizeBytes?: number | undefined;
+  maxArtifactSizeBytes?: number | undefined;
+}
+
+export interface PruneOptions {
+  olderThanDays: number;
+  dryRun?: boolean | undefined;
+}
+
+export interface PruneResult {
+  dryRun: boolean;
+  cutoffDate: string;
+  tasksCount: number;
+  messagesCount: number;
+  messageEventsCount: number;
+  taskTransitionsCount: number;
+  approvalsCount: number;
+}

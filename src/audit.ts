@@ -24,7 +24,15 @@ export interface AuditSnapshot {
   artifacts: ArtifactRecord[];
 }
 
-export function generateAuditSnapshot(broker: AgentCorpBroker): AuditSnapshot {
+export interface AuditExportOptions {
+  limit?: number | undefined;
+  since?: string | undefined;
+}
+
+export function generateAuditSnapshot(
+  broker: AgentCorpBroker,
+  options: AuditExportOptions = {},
+): AuditSnapshot {
   const db = broker.database;
   const boundRoles = new Map(
     db.listAllRoleBindings().map((b) => [b.roleId, b.agentId]),
@@ -38,14 +46,34 @@ export function generateAuditSnapshot(broker: AgentCorpBroker): AuditSnapshot {
     boundAgent: boundRoles.get(role.id),
   }));
 
+  let tasks = db.listAllTasks();
+  let messages = db.listAllMessages();
+  let approvals = db.listAllApprovals();
+  let artifacts = db.listArtifacts(null);
+
+  if (options.since) {
+    const sinceDate = options.since;
+    tasks = tasks.filter((t) => t.createdAt >= sinceDate || t.updatedAt >= sinceDate);
+    messages = messages.filter((m) => m.createdAt >= sinceDate);
+    approvals = approvals.filter((a) => a.createdAt >= sinceDate);
+    artifacts = artifacts.filter((a) => a.createdAt >= sinceDate);
+  }
+
+  if (options.limit !== undefined && options.limit > 0) {
+    tasks = tasks.slice(-options.limit);
+    messages = messages.slice(-options.limit);
+    approvals = approvals.slice(-options.limit);
+    artifacts = artifacts.slice(-options.limit);
+  }
+
   return {
     exportedAt: new Date().toISOString(),
     company: broker.config.company.name,
     roles,
-    tasks: db.listAllTasks(),
-    messages: db.listAllMessages(),
-    approvals: db.listAllApprovals(),
-    artifacts: db.listArtifacts(null),
+    tasks,
+    messages,
+    approvals,
+    artifacts,
   };
 }
 
@@ -148,11 +176,12 @@ export function formatAuditMarkdown(snapshot: AuditSnapshot): string {
 export function exportAuditTrail(
   broker: AgentCorpBroker,
   outputDir = "coord",
+  options: AuditExportOptions = {},
 ): { markdownPath: string; jsonPath: string; snapshot: AuditSnapshot } {
   const absoluteDir = resolve(outputDir);
   mkdirSync(absoluteDir, { recursive: true });
 
-  const snapshot = generateAuditSnapshot(broker);
+  const snapshot = generateAuditSnapshot(broker, options);
   const markdown = formatAuditMarkdown(snapshot);
 
   const markdownPath = resolve(absoluteDir, "audit.md");
