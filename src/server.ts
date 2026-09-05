@@ -299,6 +299,7 @@ export class AgentCorpServer {
           status: "ok",
           company: this.config.company.name,
           roles: this.config.roles.map((r) => r.id),
+          presence: this.database.listRolePresence(),
           pid: process.pid,
           startedAt: this.startedAt,
           uptimeSeconds: this.startedAt ? Math.floor((Date.now() - new Date(this.startedAt).getTime()) / 1000) : 0,
@@ -403,6 +404,26 @@ export class AgentCorpServer {
       req.on("close", () => {
         this.sseClients.delete(res);
       });
+      return;
+    }
+
+    if (path === "/api/status" && method === "GET") {
+      this.sendJson(res, 200, {
+        status: "ok",
+        company: this.config.company.name,
+        roles: this.config.roles.map((r) => r.id),
+        presence: this.database.listRolePresence(),
+        pid: process.pid,
+        startedAt: this.startedAt,
+        uptimeSeconds: this.startedAt ? Math.floor((Date.now() - new Date(this.startedAt).getTime()) / 1000) : 0,
+        pendingApprovals: this.broker.listPendingApprovals().length,
+        schemaVersion: this.database.getSchemaVersion(),
+      });
+      return;
+    }
+
+    if (path === "/api/presence" && method === "GET") {
+      this.sendJson(res, 200, this.database.listRolePresence());
       return;
     }
 

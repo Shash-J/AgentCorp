@@ -175,6 +175,30 @@ export const MIGRATIONS: Migration[] = [
       `).run(now, now);
     },
   },
+  {
+    version: 6,
+    name: "add_idempotency_and_presence",
+    up: (db: DatabaseSync) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS idempotency_keys (
+          key TEXT PRIMARY KEY,
+          role_id TEXT NOT NULL,
+          operation TEXT NOT NULL,
+          request_hash TEXT,
+          response_json TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE INDEX IF NOT EXISTS idx_idempotency_role ON idempotency_keys(role_id, created_at);
+      `);
+
+      const cols = db.prepare("PRAGMA table_info(role_bindings)").all() as Array<{ name: string }>;
+      const hasLastSeen = cols.some((col) => col.name === "last_seen_at");
+      if (!hasLastSeen) {
+        db.exec("ALTER TABLE role_bindings ADD COLUMN last_seen_at TEXT");
+      }
+    },
+  },
 ];
 
 export function ensureMigrationTable(db: DatabaseSync): void {

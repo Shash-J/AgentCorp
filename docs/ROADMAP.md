@@ -49,6 +49,21 @@ and a real-time dark glassmorphic web dashboard.
 Exit criteria met: A user can operate, monitor, and sign off multi-agent workflows
 either completely inside their terminal or via an intuitive live web dashboard without raw SQL.
 
+## Milestone 2.5 — bounded storage, self-healing sessions & observability (complete)
+
+Goal: ensure bounded memory and disk usage, auto-recovering stdio adapters, and complete operational transparency.
+
+- Hard memory & disk bounds: 2 MB HTTP body, 1 MB message payload, 5 MB artifact content, configurable 64 KB audit payload budget
+- Opaque cursor pagination across tasks, messages, inboxes, artifacts, and approvals
+- Safe history pruning (`agentcorp prune`) with dry-run simulation and SQLite WAL compaction (`agentcorp compact`)
+- Resilient Stdio MCP Proxy with auto-reconnection and bounded exponential backoff across daemon crashes/restarts
+- Mutation idempotency keys (`idempotency_key`) and operation lookup (`get_operation`) guaranteeing zero duplicate mutations
+- Role presence tracking (`online`, `idle`, `offline`) and last-seen telemetry across `get_work_queue`, `/health`, and Web Console
+- Bounded rotating daemon logs (`.agentcorp/daemon.log`, 5 MB max with 3 backups) and crash forensics (`.agentcorp/crash.log`)
+- Diagnostic tool `agentcorp doctor` for comprehensive subsystem verification
+
+Exit criteria met: Chaos E2E kills daemon mid-session and proves same client recovery, durable state, zero duplicate mutation, bounded logs, and verified doctor diagnostics.
+
 ## Milestone 3 — adapters and interoperability (next)
 
 - Tested setup guides for Codex, Gemini, Claude Code, VS Code, and Cursor

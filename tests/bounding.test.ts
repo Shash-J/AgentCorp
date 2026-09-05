@@ -497,9 +497,9 @@ describe("bounding, pagination, and maintenance", () => {
       mkdirSync(testDir, { recursive: true });
       const dbPath = resolve(testDir, "restart_test.db");
 
-      // Phase 1: Open, write data, verify schema version 5
+      // Phase 1: Open, write data, verify schema version 6
       const db1 = new AgentCorpDatabase(dbPath);
-      expect(db1.getSchemaVersion()).toBe(5);
+      expect(db1.getSchemaVersion()).toBe(6);
       db1.insertTask({
         taskId: "task_persisted",
         title: "Persisted Task",
@@ -515,7 +515,7 @@ describe("bounding, pagination, and maintenance", () => {
       // Phase 2: Reopen from disk, verify schema version and data persistence
       const db2 = new AgentCorpDatabase(dbPath);
       try {
-        expect(db2.getSchemaVersion()).toBe(5);
+        expect(db2.getSchemaVersion()).toBe(6);
         const task = db2.getTask("task_persisted");
         expect(task).toBeDefined();
         expect(task?.title).toBe("Persisted Task");

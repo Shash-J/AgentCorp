@@ -6,6 +6,7 @@ import { getCurrentSchemaVersion, runMigrations } from "./migrations.js";
 import type {
   ArtifactRecord,
   AuditExportOptions,
+  IdempotencyRecord,
   InitialPolicy,
   MaintenanceLogRecord,
   MessageRecord,
@@ -15,6 +16,7 @@ import type {
   PolicyRule,
   PruneOptions,
   PruneResult,
+  RolePresence,
   TaskRecord,
 } from "./types.js";
 
@@ -251,14 +253,120 @@ export class AgentCorpDatabase {
   }
 
   bindRole(roleId: string, agentId: string, capabilities: string[], connectedAt: string): void {
+    const cols = (this.db.prepare("PRAGMA table_info(role_bindings)").all() as Array<{ name: string }>).map((c) => c.name);
+    const hasLastSeen = cols.includes("last_seen_at");
+    if (hasLastSeen) {
+      this.db.prepare(`
+        INSERT INTO role_bindings (role_id, agent_id, capabilities, connected_at, last_seen_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(role_id) DO UPDATE SET
+          agent_id = excluded.agent_id,
+          capabilities = excluded.capabilities,
+          connected_at = excluded.connected_at,
+          last_seen_at = excluded.last_seen_at
+      `).run(roleId, agentId, JSON.stringify(capabilities), connectedAt, connectedAt);
+    } else {
+      this.db.prepare(`
+        INSERT INTO role_bindings (role_id, agent_id, capabilities, connected_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(role_id) DO UPDATE SET
+          agent_id = excluded.agent_id,
+          capabilities = excluded.capabilities,
+          connected_at = excluded.connected_at
+      `).run(roleId, agentId, JSON.stringify(capabilities), connectedAt);
+    }
+  }
+
+  touchRolePresence(roleId: string, timestamp: string = new Date().toISOString()): void {
+    const cols = (this.db.prepare("PRAGMA table_info(role_bindings)").all() as Array<{ name: string }>).map((c) => c.name);
+    if (!cols.includes("last_seen_at")) return;
+    const existing = this.db.prepare("SELECT role_id FROM role_bindings WHERE role_id = ?").get(roleId);
+    if (existing) {
+      this.db.prepare(`
+        UPDATE role_bindings
+        SET last_seen_at = ?
+        WHERE role_id = ?
+      `).run(timestamp, roleId);
+    } else {
+      this.db.prepare(`
+        INSERT INTO role_bindings (role_id, agent_id, capabilities, connected_at, last_seen_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(roleId, `${roleId}-session`, "[]", timestamp, timestamp);
+    }
+  }
+
+  listRolePresence(): RolePresence[] {
+    const cols = (this.db.prepare("PRAGMA table_info(role_bindings)").all() as Array<{ name: string }>).map((c) => c.name);
+    const hasLastSeen = cols.includes("last_seen_at");
+    const query = hasLastSeen
+      ? "SELECT role_id, agent_id, connected_at, last_seen_at FROM role_bindings ORDER BY role_id ASC"
+      : "SELECT role_id, agent_id, connected_at FROM role_bindings ORDER BY role_id ASC";
+
+    const rows = this.db.prepare(query).all() as Array<{
+      role_id: string;
+      agent_id: string;
+      connected_at: string;
+      last_seen_at?: string | null;
+    }>;
+    const nowMs = Date.now();
+    return rows.map((r) => {
+      const lastSeenStr = r.last_seen_at ?? r.connected_at;
+      const lastSeenMs = lastSeenStr ? new Date(lastSeenStr).getTime() : nowMs;
+      const diffMs = nowMs - lastSeenMs;
+      let status: "online" | "idle" | "offline" = "online";
+      if (diffMs > 300000) { // > 5 minutes
+        status = "offline";
+      } else if (diffMs > 60000) { // > 1 minute
+        status = "idle";
+      }
+      return {
+        roleId: r.role_id,
+        agentId: r.agent_id,
+        connectedAt: r.connected_at,
+        lastSeenAt: lastSeenStr,
+        status,
+      };
+    });
+  }
+
+  saveIdempotency(record: IdempotencyRecord): void {
     this.db.prepare(`
-      INSERT INTO role_bindings (role_id, agent_id, capabilities, connected_at)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(role_id) DO UPDATE SET
-        agent_id = excluded.agent_id,
-        capabilities = excluded.capabilities,
-        connected_at = excluded.connected_at
-    `).run(roleId, agentId, JSON.stringify(capabilities), connectedAt);
+      INSERT OR REPLACE INTO idempotency_keys (key, role_id, operation, request_hash, response_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      record.key,
+      record.roleId,
+      record.operation,
+      record.requestHash ?? null,
+      record.responseJson,
+      record.createdAt,
+    );
+  }
+
+  getIdempotency(key: string, roleId: string): IdempotencyRecord | undefined {
+    const row = this.db.prepare(`
+      SELECT key, role_id, operation, request_hash, response_json, created_at
+      FROM idempotency_keys
+      WHERE key = ? AND role_id = ?
+    `).get(key, roleId) as
+      | {
+          key: string;
+          role_id: string;
+          operation: string;
+          request_hash?: string | null;
+          response_json: string;
+          created_at: string;
+        }
+      | undefined;
+    if (!row) return undefined;
+    return {
+      key: row.key,
+      roleId: row.role_id,
+      operation: row.operation,
+      requestHash: row.request_hash ?? undefined,
+      responseJson: row.response_json,
+      createdAt: row.created_at,
+    };
   }
 
   insertTask(task: TaskRecord): void {
@@ -992,6 +1100,15 @@ export class AgentCorpDatabase {
           WHERE created_at < ?
         `).run(cutoff);
 
+        // 8b. Clean up expired idempotency keys
+        const tables = (this.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((t) => t.name);
+        if (tables.includes("idempotency_keys")) {
+          this.db.prepare(`
+            DELETE FROM idempotency_keys
+            WHERE created_at < ?
+          `).run(cutoff);
+        }
+
         // 9. Persist prune execution log inside transaction
         this.insertMaintenanceLog({
           id: `maint_${randomUUID()}`,
@@ -1040,6 +1157,11 @@ export class AgentCorpDatabase {
       createdAt: new Date().toISOString(),
     });
     return result;
+  }
+
+  checkIntegrity(): boolean {
+    const row = this.db.prepare("PRAGMA integrity_check").get() as { integrity_check?: string } | undefined;
+    return row?.integrity_check === "ok";
   }
 
   insertMaintenanceLog(record: MaintenanceLogRecord, maxEntries = MAX_MAINTENANCE_LOG_ENTRIES): void {

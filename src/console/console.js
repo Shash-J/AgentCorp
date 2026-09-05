@@ -189,9 +189,25 @@
       if (res.ok) {
         const data = await res.json();
         document.getElementById("company-name").textContent = data.company || "AgentCorp";
-        setupRoleInboxPills(data.roles || []);
+        setupRoleInboxPills(data.roles || [], data.presence || []);
+        renderHeaderPresence(data.presence || []);
       }
     } catch {}
+  }
+
+  function renderHeaderPresence(presenceList) {
+    const container = document.getElementById("header-presence-bar");
+    if (!container) return;
+    if (!presenceList || presenceList.length === 0) {
+      container.innerHTML = "";
+      return;
+    }
+    container.innerHTML = presenceList.map((p) => `
+      <div class="presence-pill" title="Role: ${escapeHtml(p.roleId)}&#10;Agent: ${escapeHtml(p.boundAgent || 'unbound')}&#10;Last Seen: ${escapeHtml(p.lastSeenAt || 'never')}&#10;Status: ${p.status}">
+        <span class="presence-dot ${p.status}"></span>
+        <span>${escapeHtml(p.roleId)}</span>
+      </div>
+    `).join("");
   }
 
   async function loadApprovals() {
@@ -471,21 +487,27 @@
   }
 
   // Role Inboxes
-  function setupRoleInboxPills(roles) {
+  function setupRoleInboxPills(roles, presenceList = []) {
     const container = document.getElementById("role-inbox-pills");
     if (!container) return;
     if (roles.length > 0 && !activeRole) activeRole = roles[0];
+    const presenceMap = new Map((presenceList || []).map((p) => [p.roleId, p]));
 
-    container.innerHTML = roles.map((r) => `
-      <button class="btn btn-sm ${r === activeRole ? "btn-primary" : "btn-secondary"}" data-role="${r}">
-        ${r}
-      </button>
-    `).join("");
+    container.innerHTML = roles.map((r) => {
+      const pres = presenceMap.get(r);
+      const status = pres ? pres.status : "offline";
+      return `
+        <button class="btn btn-sm ${r === activeRole ? "btn-primary" : "btn-secondary"}" data-role="${r}" style="display: inline-flex; align-items: center; gap: 6px;">
+          <span class="presence-dot ${status}"></span>
+          <span>${escapeHtml(r)}</span>
+        </button>
+      `;
+    }).join("");
 
     container.querySelectorAll("button").forEach((btn) => {
       btn.addEventListener("click", () => {
         activeRole = btn.getAttribute("data-role");
-        setupRoleInboxPills(roles);
+        setupRoleInboxPills(roles, presenceList);
         renderInboxMessages();
       });
     });

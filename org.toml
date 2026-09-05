@@ -1,6 +1,14 @@
 [company]
 name = "My Agent Company"
 
+[limits]
+max_request_body_bytes = 2097152
+max_message_payload_bytes = 1048576
+max_artifact_bytes = 5242880
+default_page_size = 50
+max_page_size = 200
+max_audit_payload_bytes = 65536
+
 [[roles]]
 id = "architect"
 display_name = "Architect"

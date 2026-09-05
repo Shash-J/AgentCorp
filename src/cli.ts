@@ -10,11 +10,30 @@ import { AgentCorpBroker } from "./broker.js";
 import { loadOrgConfig } from "./config.js";
 import { ensureCredentials, loadCredentials } from "./credentials.js";
 import { AgentCorpDatabase } from "./database.js";
+import { recordCrashDiagnostics, RotatingLogger, runDoctor } from "./diagnostics.js";
 import { AgentCorpError } from "./errors.js";
 import { AgentCorpServer, readDaemonInfo, type DaemonInfo } from "./server.js";
 import { ensureDaemonRunning, isDaemonHealthy, runStdioAdapter } from "./stdio-adapter.js";
 import { AgentCorpTui } from "./tui.js";
 import type { InitialPolicy, PendingApproval, PolicyRule } from "./types.js";
+
+process.on("uncaughtException", (error) => {
+  recordCrashDiagnostics(".agentcorp/crash.log", error, {
+    args: process.argv,
+    cwd: process.cwd(),
+  });
+  console.error("Fatal uncaught exception recorded in .agentcorp/crash.log");
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  recordCrashDiagnostics(".agentcorp/crash.log", reason, {
+    args: process.argv,
+    cwd: process.cwd(),
+  });
+  console.error("Fatal unhandled rejection recorded in .agentcorp/crash.log");
+  process.exit(1);
+});
 
 const SAMPLE_ORG = `[company]
 name = "My Agent Company"
@@ -23,6 +42,9 @@ name = "My Agent Company"
 max_request_body_bytes = 2097152
 max_message_payload_bytes = 1048576
 max_artifact_bytes = 5242880
+default_page_size = 50
+max_page_size = 200
+max_audit_payload_bytes = 65536
 
 [[roles]]
 id = "architect"
@@ -386,7 +408,14 @@ program
       host: options.host,
     });
 
+    const daemonLogger = new RotatingLogger(".agentcorp/daemon.log");
+    daemonLogger.write(`AgentCorp daemon starting on ${options.host}:${options.port} (PID: ${process.pid}, config: ${gOpts.config}, db: ${gOpts.db})`);
+    broker.on("event", (evt) => {
+      daemonLogger.write(`[event:${evt.type}] ${JSON.stringify(evt)}`);
+    });
+
     const info = await server.start();
+    daemonLogger.write(`AgentCorp daemon listening at ${info.url}`);
     console.error(`AgentCorp Daemon started at ${info.url} (PID: ${info.pid})`);
     output({
       status: "running",
@@ -397,6 +426,7 @@ program
 
     const shutdown = async () => {
       console.error("\nShutting down AgentCorp daemon...");
+      daemonLogger.write(`AgentCorp daemon shut down cleanly (PID: ${process.pid})`);
       await server.stop();
       process.exit(0);
     };
@@ -450,6 +480,18 @@ program
       health: live.health,
       controlFileRepaired: live.controlFileRepaired,
     });
+  });
+
+program
+  .command("doctor")
+  .description("Perform comprehensive self-healing and observability diagnostics")
+  .action(async () => {
+    const gOpts = program.opts<GlobalOptions>();
+    const report = await runDoctor({
+      configPath: gOpts.config,
+      dbPath: gOpts.db,
+    });
+    output(report);
   });
 
 program

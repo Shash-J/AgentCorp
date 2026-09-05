@@ -33,8 +33,15 @@ export {
   ensureDaemonRunning,
   isDaemonHealthy,
   runStdioAdapter,
+  ResilientDaemonClient,
 } from "./stdio-adapter.js";
 export type { StdioAdapterOptions } from "./stdio-adapter.js";
+export {
+  RotatingLogger,
+  recordCrashDiagnostics,
+  runDoctor,
+} from "./diagnostics.js";
+export type { DoctorCheck, DoctorReport, LogRotationOptions } from "./diagnostics.js";
 export { AgentCorpTui } from "./tui.js";
 export type { TuiOptions } from "./tui.js";
 export * from "./types.js";

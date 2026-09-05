@@ -89,19 +89,20 @@ working directory.
 Configure the second agent with the same config and database paths, changing
 only the final role to `developer`.
 
-The MCP tool surface includes:
+The MCP tool surface includes 15 tools:
 
 - `register_role`, `whoami`
 - `create_task`, `list_tasks`, `get_work_queue`, `update_task_status`
 - `send_message`, `get_inbox`, `acknowledge_message`, `accept_handoff`, `get_thread`
 - `create_artifact`, `list_artifacts`, `get_artifact`
+- `get_operation`
 
 ## Efficient agent loop
 
 Use `get_work_queue` as the first AgentCorp call in every agent session and
 again after each handoff or status change. It combines unread messages, active
-tasks, and prioritized next actions so an agent does not need to independently
-reconcile `get_inbox`, `list_tasks`, and task threads.
+tasks, live role presence, and prioritized next actions so an agent does not need
+to independently reconcile `get_inbox`, `list_tasks`, and task threads.
 
 For a gated task handoff:
 
@@ -115,10 +116,10 @@ For a gated task handoff:
    and requests the `in_progress` transition without creating duplicates on
    retries.
 
-MCP servers expose tools; they cannot independently wake an idle model inside
-an IDE. Configure each agent's standing instructions to call `get_work_queue`
-at session start. Background wake-up requires a host-specific runner or
-notification adapter and is not claimed by this preview.
+> [!IMPORTANT]
+> **LLM Wake Limitations & Handoff Best Practices**:
+> - **Passive MCP Protocol**: MCP servers expose tools over standard JSON-RPC; they **cannot independently wake an idle LLM** inside an external host (Antigravity, Codex, Cursor, Claude Desktop). Standing agent instructions must invoke `get_work_queue` at session start.
+> - **Lightweight ID / Summary Handoffs**: When agents coordinate or hand off work, always pass concise IDs and brief summaries (e.g., `taskId`, `messageId`, summary of diffs/artifacts) rather than dumping whole codebase contexts or large files into prompt memory. Artifacts should be retrieved on demand with `get_artifact`.
 
 ## Human approval console
 
@@ -146,6 +147,7 @@ agentcorp console --browser
 
 Features include:
 - Real-time approval feed with side-by-side JSON diff editor
+- Role presence indicators (online, idle, offline) and connection health
 - Role inboxes & active task threads
 - Artifact catalog viewer
 - Runtime policy inspector and instant toggle switch (enable / disable)
@@ -175,6 +177,7 @@ AgentCorp enforces bounded memory and disk usage to protect long-running daemons
   - HTTP body: 2 MB maximum (returns HTTP 413 `PAYLOAD_TOO_LARGE`).
   - Message payload: 1 MB maximum (`PAYLOAD_TOO_LARGE`).
   - Artifact content: 5 MB maximum (`ARTIFACT_TOO_LARGE`).
+  - Audit payload budget: Operator-configurable (`max_audit_payload_bytes`, defaults to 64 KB).
 - **Cursor pagination**:
   - Task, message, inbox, and artifact queries are bounded to 50 items by default (max 200).
   - MCP tools and Admin REST endpoints support `limit` and opaque `cursor` pagination with optional `envelope` payloads and `X-Next-Cursor` headers.
@@ -194,6 +197,16 @@ AgentCorp enforces bounded memory and disk usage to protect long-running daemons
   # Export the 100 most recent records or only records since a timestamp
   agentcorp audit export --limit 100 --since 2026-09-01T00:00:00Z
   ```
+
+## Self-healing, observability, and idempotency
+
+AgentCorp includes enterprise-grade operational safeguards to guarantee durable multi-agent sessions:
+
+- **Resilient Stdio MCP Proxy**: When running inside an IDE via stdio (`agentcorp mcp --role developer`), the proxy wraps connections with auto-reconnection and bounded exponential backoff. If the central daemon process crashes or restarts, running agent sessions transparently recover without transport exceptions.
+- **Mutation Idempotency & Operation Lookup**: Mutations (`create_task`, `send_message`, `create_artifact`, `accept_handoff`, `update_task_status`) accept an optional `idempotency_key`. Replays return the exact recorded response without duplicate side effects. Agents can query cached outcomes at any time using `get_operation`.
+- **Role Presence & Last-Seen Telemetry**: Every authenticated agent interaction touches role presence. `get_work_queue`, `/health`, `/api/status`, and the Web Console report real-time statuses (`online` <1m, `idle` 1–5m, `offline` >5m).
+- **Bounded Rotating Daemon Logs & Crash Diagnostics**: Daemon events are written to `.agentcorp/daemon.log` with size-bounded rotation (5 MB with 3 backups). Uncaught exceptions record complete diagnostic forensics into `.agentcorp/crash.log`.
+- **System Doctor**: Run `agentcorp doctor` at any time to verify configuration validity, database integrity (`PRAGMA integrity_check`), credential coverage, daemon status, and log health.
 
 ## Policy semantics
 

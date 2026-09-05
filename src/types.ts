@@ -79,6 +79,7 @@ export const LimitsConfigSchema = z
     max_artifact_size_bytes: z.number().int().positive().optional(),
     default_page_size: z.number().int().positive().optional(),
     max_page_size: z.number().int().positive().optional(),
+    max_audit_payload_bytes: z.number().int().positive().optional(),
   })
   .refine(
     (data) => {
@@ -93,6 +94,24 @@ export const LimitsConfigSchema = z
     },
   );
 export type LimitsConfig = z.infer<typeof LimitsConfigSchema>;
+export const DEFAULT_MAX_AUDIT_PAYLOAD_BYTES = 65536; // 64 KB
+
+export interface RolePresence {
+  roleId: string;
+  agentId?: string | undefined;
+  lastSeenAt?: string | undefined;
+  connectedAt?: string | undefined;
+  status: "online" | "idle" | "offline";
+}
+
+export interface IdempotencyRecord {
+  key: string;
+  roleId: string;
+  operation: string;
+  requestHash?: string | undefined;
+  responseJson: string;
+  createdAt: string;
+}
 
 export const OrgConfigSchema = z.object({
   company: z.object({ name: z.string().min(1) }),
@@ -160,6 +179,7 @@ export interface RoleWorkQueue {
   unreadMessages: MessageRecord[];
   activeTasks: TaskRecord[];
   nextActions: WorkQueueAction[];
+  presence?: RolePresence[] | undefined;
 }
 
 export interface ArtifactRecord {

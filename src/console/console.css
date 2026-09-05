@@ -727,3 +727,68 @@ body {
   from { transform: translateY(12px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
 }
+
+/* Presence & Connection Indicators */
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-dot.connected, .status-dot.online {
+  background-color: var(--emerald);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+}
+
+.status-dot.idle {
+  background-color: var(--amber);
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.4);
+}
+
+.status-dot.disconnected, .status-dot.offline {
+  background-color: var(--rose);
+}
+
+.presence-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.presence-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.presence-dot.online {
+  background: var(--emerald);
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.5);
+}
+
+.presence-dot.idle {
+  background: var(--amber);
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.5);
+}
+
+.presence-dot.offline {
+  background: #64748b;
+}
+

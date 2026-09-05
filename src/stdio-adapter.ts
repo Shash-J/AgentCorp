@@ -90,9 +90,132 @@ export async function ensureDaemonRunning(options: {
   );
 }
 
+export class ResilientDaemonClient {
+  private client: Client | null = null;
+  private transport: StreamableHTTPClientTransport | null = null;
+  private currentUrl: string | null = null;
+
+  constructor(
+    readonly options: StdioAdapterOptions,
+    readonly roleToken: string,
+  ) {}
+
+  get currentClient(): Client | null {
+    return this.client;
+  }
+
+  async getOrConnect(): Promise<Client> {
+    if (this.client) {
+      return this.client;
+    }
+    return this.reconnect();
+  }
+
+  async reconnect(): Promise<Client> {
+    if (this.client) {
+      try {
+        await this.client.close();
+      } catch {
+        // Ignore close errors during reconnection
+      }
+      this.client = null;
+      this.transport = null;
+    }
+
+    let daemonUrl = this.options.daemonUrl;
+
+    if (this.options.daemonFilePath) {
+      if (existsSync(this.options.daemonFilePath)) {
+        const info = readDaemonInfo(this.options.daemonFilePath);
+        if (info && (await isDaemonHealthy(info.url))) {
+          daemonUrl = info.url;
+        }
+      }
+    } else if (!daemonUrl) {
+      const defaultDaemonPath = ".agentcorp/daemon.json";
+      if (existsSync(defaultDaemonPath)) {
+        const info = readDaemonInfo(defaultDaemonPath);
+        if (info && (await isDaemonHealthy(info.url))) {
+          daemonUrl = info.url;
+        }
+      }
+    }
+
+    if (!daemonUrl || !(await isDaemonHealthy(daemonUrl))) {
+      const info = await ensureDaemonRunning({
+        configPath: this.options.configPath,
+        dbPath: this.options.dbPath,
+        daemonFilePath: this.options.daemonFilePath,
+        noSpawn: this.options.noSpawn,
+      });
+      daemonUrl = info.url;
+    }
+
+    this.currentUrl = daemonUrl;
+    const transport = new StreamableHTTPClientTransport(new URL(`${daemonUrl}/mcp`), {
+      requestInit: {
+        headers: {
+          Authorization: `Bearer ${this.roleToken}`,
+        },
+      },
+    });
+
+    const client = new Client({
+      name: `agentcorp-proxy-${this.options.role}`,
+      version: "0.1.0",
+    });
+
+    await client.connect(transport);
+    this.client = client;
+    this.transport = transport;
+    return client;
+  }
+
+  async executeWithRetry<T>(fn: (client: Client) => Promise<T>): Promise<T> {
+    let client = await this.getOrConnect();
+    try {
+      return await fn(client);
+    } catch (err: unknown) {
+      // Reconnection with bounded exponential backoff [100ms, 250ms, 500ms, 1000ms, 2000ms]
+      const backoffs = [100, 250, 500, 1000, 2000];
+      let lastErr = err;
+      for (const delay of backoffs) {
+        await new Promise((r) => setTimeout(r, delay));
+        try {
+          client = await this.reconnect();
+          return await fn(client);
+        } catch (retryErr: unknown) {
+          lastErr = retryErr;
+        }
+      }
+      throw lastErr;
+    }
+  }
+
+  async listTools() {
+    return this.executeWithRetry((c) => c.listTools());
+  }
+
+  async callTool(params: { name: string; arguments?: Record<string, unknown> }) {
+    return this.executeWithRetry((c) => c.callTool(params));
+  }
+
+  async close(): Promise<void> {
+    if (this.client) {
+      try {
+        await this.client.close();
+      } catch {
+        // Ignore close errors
+      }
+      this.client = null;
+      this.transport = null;
+    }
+  }
+}
+
 export async function createStdioProxy(options: StdioAdapterOptions): Promise<{
   server: Server;
-  daemonClient: Client;
+  daemonClient: ResilientDaemonClient;
 }> {
   const config = loadOrgConfig(options.configPath ?? "org.toml");
   const creds = ensureCredentials(config, options.credentialsPath ?? ".agentcorp/credentials.json");
@@ -101,29 +224,8 @@ export async function createStdioProxy(options: StdioAdapterOptions): Promise<{
     throw new AgentCorpError("UNKNOWN_ROLE", `Role '${options.role}' not found in credentials`);
   }
 
-  let daemonUrl = options.daemonUrl;
-  if (!daemonUrl) {
-    const daemonInfo = await ensureDaemonRunning({
-      configPath: options.configPath,
-      dbPath: options.dbPath,
-      daemonFilePath: options.daemonFilePath,
-      noSpawn: options.noSpawn,
-    });
-    daemonUrl = daemonInfo.url;
-  }
-
-  const transport = new StreamableHTTPClientTransport(new URL(`${daemonUrl}/mcp`), {
-    requestInit: {
-      headers: {
-        Authorization: `Bearer ${roleToken}`,
-      },
-    },
-  });
-  const daemonClient = new Client({
-    name: `agentcorp-proxy-${options.role}`,
-    version: "0.1.0",
-  });
-  await daemonClient.connect(transport);
+  const resilientClient = new ResilientDaemonClient(options, roleToken);
+  await resilientClient.getOrConnect();
 
   const server = new Server(
     { name: `agentcorp-${options.role}`, version: "0.1.0" },
@@ -131,20 +233,20 @@ export async function createStdioProxy(options: StdioAdapterOptions): Promise<{
   );
 
   server.setRequestHandler("tools/list", async () => {
-    const result = await daemonClient.listTools();
+    const result = await resilientClient.listTools();
     return { tools: result.tools };
   });
 
   server.setRequestHandler("tools/call", async (request) => {
     const params = request.params as { name: string; arguments?: Record<string, unknown> };
-    const result = await daemonClient.callTool({
+    const result = await resilientClient.callTool({
       name: params.name,
-      arguments: params.arguments,
+      ...(params.arguments !== undefined ? { arguments: params.arguments } : {}),
     });
     return result as never;
   });
 
-  return { server, daemonClient };
+  return { server, daemonClient: resilientClient };
 }
 
 export async function runStdioAdapter(options: StdioAdapterOptions): Promise<void> {

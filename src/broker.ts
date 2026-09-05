@@ -9,6 +9,7 @@ import {
   TaskStatusSchema,
   type ArtifactRecord,
   type BrokerLimits,
+  type IdempotencyRecord,
   type InitialPolicy,
   type MessageRecord,
   type MessageType,
@@ -20,6 +21,7 @@ import {
   type PruneOptions,
   type PruneResult,
   type RoleDefinition,
+  type RolePresence,
   type RoleWorkQueue,
   type TaskRecord,
   type TaskStatus,
@@ -63,6 +65,14 @@ export interface SendMessageInput {
   references?: string[];
   riskTags?: string[];
   inReplyTo?: string;
+  idempotencyKey?: string;
+}
+
+export interface CreateTaskInput {
+  title: string;
+  description?: string;
+  assignedTo?: string;
+  idempotencyKey?: string;
 }
 
 export interface CreateArtifactInput {
@@ -72,6 +82,7 @@ export interface CreateArtifactInput {
   contentUri?: string;
   visibleToRoles?: "all" | string[];
   relatedTaskId?: string;
+  idempotencyKey?: string;
 }
 
 export const DEFAULT_MAX_PAYLOAD_SIZE_BYTES = 1 * 1024 * 1024; // 1 MB
@@ -118,10 +129,52 @@ export class AgentCorpBroker extends EventEmitter {
     return this.now().toISOString();
   }
 
-  private role(roleId: string): RoleDefinition {
+  private role(roleId: string, touchPresence = true): RoleDefinition {
     const role = this.roles.get(roleId);
     invariant(role, "UNKNOWN_ROLE", `Unknown role: ${roleId}`);
+    if (touchPresence) {
+      try {
+        this.database.touchRolePresence(roleId, this.timestamp());
+      } catch {
+        // Non-critical if table or column not yet migrated
+      }
+    }
     return role;
+  }
+
+  private executeIdempotent<T>(
+    callerRole: string,
+    operation: string,
+    idempotencyKey: string | undefined,
+    requestPayload: unknown,
+    fn: () => T,
+  ): T {
+    if (!idempotencyKey) {
+      return fn();
+    }
+    const existing = this.database.getIdempotency(idempotencyKey, callerRole);
+    if (existing) {
+      return JSON.parse(existing.responseJson) as T;
+    }
+    const result = fn();
+    try {
+      this.database.saveIdempotency({
+        key: idempotencyKey,
+        roleId: callerRole,
+        operation,
+        requestHash: createHash("sha256").update(JSON.stringify(requestPayload ?? null)).digest("hex"),
+        responseJson: JSON.stringify(result),
+        createdAt: this.timestamp(),
+      });
+    } catch {
+      // Non-critical if table not yet migrated
+    }
+    return result;
+  }
+
+  getOperation(callerRole: string, key: string): IdempotencyRecord | undefined {
+    this.role(callerRole);
+    return this.database.getIdempotency(key, callerRole);
   }
 
   private seedPolicies(): void {
@@ -161,28 +214,30 @@ export class AgentCorpBroker extends EventEmitter {
 
   createTask(
     callerRole: string,
-    input: { title: string; description?: string; assignedTo?: string },
+    input: CreateTaskInput,
   ): TaskRecord {
-    this.role(callerRole);
-    if (input.assignedTo) {
-      this.assertRoute(callerRole, input.assignedTo);
-    }
-    const timestamp = this.timestamp();
-    const task: TaskRecord = {
-      taskId: this.id("task"),
-      title: input.title,
-      description: input.description ?? null,
-      createdBy: callerRole,
-      assignedTo: input.assignedTo ?? null,
-      // An intended assignee must not receive actionable work until a linked
-      // proposal has passed policy/human approval.
-      status: "proposed",
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-    this.database.insertTask(task);
-    this.emitDomainEvent("task_created", task);
-    return task;
+    return this.executeIdempotent(callerRole, "createTask", input.idempotencyKey, input, () => {
+      this.role(callerRole);
+      if (input.assignedTo) {
+        this.assertRoute(callerRole, input.assignedTo);
+      }
+      const timestamp = this.timestamp();
+      const task: TaskRecord = {
+        taskId: this.id("task"),
+        title: input.title,
+        description: input.description ?? null,
+        createdBy: callerRole,
+        assignedTo: input.assignedTo ?? null,
+        // An intended assignee must not receive actionable work until a linked
+        // proposal has passed policy/human approval.
+        status: "proposed",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      this.database.insertTask(task);
+      this.emitDomainEvent("task_created", task);
+      return task;
+    });
   }
 
   listTasksPaginated(callerRole: string, options?: PaginationOptions): PaginatedResult<TaskRecord> {
@@ -196,126 +251,128 @@ export class AgentCorpBroker extends EventEmitter {
   }
 
   sendMessage(callerRole: string, input: SendMessageInput): MessageRecord {
-    this.assertRoute(callerRole, input.toRole);
-    MessageTypeSchema.parse(input.type);
-    const serializedPayload = JSON.stringify(input.payload ?? null);
-    const payloadBytes = Buffer.byteLength(serializedPayload, "utf8");
-    invariant(
-      payloadBytes <= this.maxPayloadSizeBytes,
-      "PAYLOAD_TOO_LARGE",
-      `Message payload size (${payloadBytes} bytes) exceeds maximum allowed size of ${this.maxPayloadSizeBytes} bytes`,
-    );
-    const references = input.references ?? [];
-    const riskTags = [...new Set(input.riskTags ?? [])].sort();
-
-    if (input.taskId) {
-      const task = this.database.getTask(input.taskId);
-      invariant(task, "TASK_NOT_FOUND", `Task not found: ${input.taskId}`);
-      this.assertTaskParticipant(task, callerRole);
-    }
-    if (input.inReplyTo) {
-      const parent = this.database.getMessage(input.inReplyTo);
-      invariant(parent, "MESSAGE_NOT_FOUND", `Reply target not found: ${input.inReplyTo}`);
+    return this.executeIdempotent(callerRole, "sendMessage", input.idempotencyKey, input, () => {
+      this.assertRoute(callerRole, input.toRole);
+      MessageTypeSchema.parse(input.type);
+      const serializedPayload = JSON.stringify(input.payload ?? null);
+      const payloadBytes = Buffer.byteLength(serializedPayload, "utf8");
       invariant(
-        parent.taskId === (input.taskId ?? null),
-        "INVALID_REPLY",
-        "Reply target must belong to the same task",
+        payloadBytes <= this.maxPayloadSizeBytes,
+        "PAYLOAD_TOO_LARGE",
+        `Message payload size (${payloadBytes} bytes) exceeds maximum allowed size of ${this.maxPayloadSizeBytes} bytes`,
       );
-    }
-    for (const artifactId of references) {
-      const artifact = this.database.getArtifact(artifactId, false);
-      invariant(artifact, "ARTIFACT_NOT_FOUND", `Artifact not found: ${artifactId}`);
-      this.assertArtifactVisible(artifact, callerRole);
-      this.assertArtifactVisible(artifact, input.toRole);
-    }
+      const references = input.references ?? [];
+      const riskTags = [...new Set(input.riskTags ?? [])].sort();
 
-    const decision = evaluatePolicy(this.database.listPolicies(), {
-      subject: "message",
-      fromRole: callerRole,
-      toRole: input.toRole,
-      messageType: input.type,
-      riskTags,
-    });
-    invariant(
-      decision.action !== "delegate_to_role",
-      "UNSUPPORTED_POLICY",
-      "delegate_to_role policies are not implemented in v0",
-    );
+      if (input.taskId) {
+        const task = this.database.getTask(input.taskId);
+        invariant(task, "TASK_NOT_FOUND", `Task not found: ${input.taskId}`);
+        this.assertTaskParticipant(task, callerRole);
+      }
+      if (input.inReplyTo) {
+        const parent = this.database.getMessage(input.inReplyTo);
+        invariant(parent, "MESSAGE_NOT_FOUND", `Reply target not found: ${input.inReplyTo}`);
+        invariant(
+          parent.taskId === (input.taskId ?? null),
+          "INVALID_REPLY",
+          "Reply target must belong to the same task",
+        );
+      }
+      for (const artifactId of references) {
+        const artifact = this.database.getArtifact(artifactId, false);
+        invariant(artifact, "ARTIFACT_NOT_FOUND", `Artifact not found: ${artifactId}`);
+        this.assertArtifactVisible(artifact, callerRole);
+        this.assertArtifactVisible(artifact, input.toRole);
+      }
 
-    const timestamp = this.timestamp();
-    const status = decision.action === "auto_approve" ? "delivered" : "pending_approval";
-    const message: MessageRecord = {
-      messageId: this.id("msg"),
-      taskId: input.taskId ?? null,
-      fromRole: callerRole,
-      toRole: input.toRole,
-      type: input.type,
-      payload: input.payload,
-      references,
-      inReplyTo: input.inReplyTo ?? null,
-      status,
-      riskTags,
-      createdAt: timestamp,
-      resolvedAt: status === "delivered" ? timestamp : null,
-    };
-
-    let approvalId: string | undefined;
-    let assignedTask: TaskRecord | undefined;
-    this.database.transaction(() => {
-      this.database.insertMessage(message);
-      this.database.insertMessageEvent({
-        id: this.id("evt"),
-        messageId: message.messageId,
-        status,
-        actor: decision.action === "auto_approve" ? "policy_engine" : callerRole,
-        note: decision.matchedRuleId ? `Matched policy ${decision.matchedRuleId}` : "Default fail-closed policy",
-        createdAt: timestamp,
+      const decision = evaluatePolicy(this.database.listPolicies(), {
+        subject: "message",
+        fromRole: callerRole,
+        toRole: input.toRole,
+        messageType: input.type,
+        riskTags,
       });
-      if (status === "pending_approval") {
-        approvalId = this.id("apr");
-        this.database.insertApproval({
+      invariant(
+        decision.action !== "delegate_to_role",
+        "UNSUPPORTED_POLICY",
+        "delegate_to_role policies are not implemented in v0",
+      );
+
+      const timestamp = this.timestamp();
+      const status = decision.action === "auto_approve" ? "delivered" : "pending_approval";
+      const message: MessageRecord = {
+        messageId: this.id("msg"),
+        taskId: input.taskId ?? null,
+        fromRole: callerRole,
+        toRole: input.toRole,
+        type: input.type,
+        payload: input.payload,
+        references,
+        inReplyTo: input.inReplyTo ?? null,
+        status,
+        riskTags,
+        createdAt: timestamp,
+        resolvedAt: status === "delivered" ? timestamp : null,
+      };
+
+      let approvalId: string | undefined;
+      let assignedTask: TaskRecord | undefined;
+      this.database.transaction(() => {
+        this.database.insertMessage(message);
+        this.database.insertMessageEvent({
+          id: this.id("evt"),
+          messageId: message.messageId,
+          status,
+          actor: decision.action === "auto_approve" ? "policy_engine" : callerRole,
+          note: decision.matchedRuleId ? `Matched policy ${decision.matchedRuleId}` : "Default fail-closed policy",
+          createdAt: timestamp,
+        });
+        if (status === "pending_approval") {
+          approvalId = this.id("apr");
+          this.database.insertApproval({
+            approvalId,
+            subject: "message",
+            subjectId: message.messageId,
+            requestedBy: callerRole,
+            status: "pending",
+            context: {
+              fromRole: callerRole,
+              toRole: input.toRole,
+              type: input.type,
+              payload: input.payload,
+              taskId: input.taskId ?? null,
+              references,
+              riskTags,
+              matchedRuleId: decision.matchedRuleId,
+            },
+            createdAt: timestamp,
+            decidedAt: null,
+            decisionNote: null,
+          });
+        } else {
+          assignedTask = this.assignTaskForApprovedProposal(message, timestamp);
+        }
+      });
+
+      this.emitDomainEvent("message_created", message);
+      if (assignedTask) {
+        this.emitDomainEvent("task_status_changed", {
+          taskId: assignedTask.taskId,
+          status: "assigned",
+          task: assignedTask,
+        });
+      }
+      if (status === "pending_approval" && approvalId) {
+        this.emitDomainEvent("approval_created", {
           approvalId,
           subject: "message",
           subjectId: message.messageId,
           requestedBy: callerRole,
-          status: "pending",
-          context: {
-            fromRole: callerRole,
-            toRole: input.toRole,
-            type: input.type,
-            payload: input.payload,
-            taskId: input.taskId ?? null,
-            references,
-            riskTags,
-            matchedRuleId: decision.matchedRuleId,
-          },
-          createdAt: timestamp,
-          decidedAt: null,
-          decisionNote: null,
         });
-      } else {
-        assignedTask = this.assignTaskForApprovedProposal(message, timestamp);
       }
+
+      return message;
     });
-
-    this.emitDomainEvent("message_created", message);
-    if (assignedTask) {
-      this.emitDomainEvent("task_status_changed", {
-        taskId: assignedTask.taskId,
-        status: "assigned",
-        task: assignedTask,
-      });
-    }
-    if (status === "pending_approval" && approvalId) {
-      this.emitDomainEvent("approval_created", {
-        approvalId,
-        subject: "message",
-        subjectId: message.messageId,
-        requestedBy: callerRole,
-      });
-    }
-
-    return message;
   }
 
   getInboxPaginated(callerRole: string, options?: PaginationOptions): PaginatedResult<MessageRecord> {
@@ -428,6 +485,7 @@ export class AgentCorpBroker extends EventEmitter {
     }
 
     nextActions.sort((a, b) => b.priority - a.priority);
+    const presence = this.database.listRolePresence();
     return {
       roleId: callerRole,
       generatedAt: this.timestamp(),
@@ -439,6 +497,7 @@ export class AgentCorpBroker extends EventEmitter {
       unreadMessages,
       activeTasks,
       nextActions,
+      presence,
     };
   }
 
@@ -467,29 +526,32 @@ export class AgentCorpBroker extends EventEmitter {
   acceptHandoff(
     callerRole: string,
     messageId: string,
+    idempotencyKey?: string,
   ): { message: MessageRecord; task: TaskRecord; pendingApproval: boolean } {
-    const message = this.database.getMessage(messageId);
-    invariant(message, "MESSAGE_NOT_FOUND", `Message not found: ${messageId}`);
-    invariant(message.toRole === callerRole, "FORBIDDEN", "Only the recipient can accept a handoff");
-    invariant(message.type === "proposal", "INVALID_HANDOFF", "A handoff must be a proposal message");
-    invariant(message.taskId, "INVALID_HANDOFF", "A handoff proposal must reference a task");
-    invariant(
-      ["approved", "delivered", "acknowledged"].includes(message.status),
-      "INVALID_MESSAGE_STATE",
-      "The proposal must be approved and delivered before it can be accepted",
-    );
+    return this.executeIdempotent(callerRole, "acceptHandoff", idempotencyKey, { messageId }, () => {
+      const message = this.database.getMessage(messageId);
+      invariant(message, "MESSAGE_NOT_FOUND", `Message not found: ${messageId}`);
+      invariant(message.toRole === callerRole, "FORBIDDEN", "Only the recipient can accept a handoff");
+      invariant(message.type === "proposal", "INVALID_HANDOFF", "A handoff must be a proposal message");
+      invariant(message.taskId, "INVALID_HANDOFF", "A handoff proposal must reference a task");
+      invariant(
+        ["approved", "delivered", "acknowledged"].includes(message.status),
+        "INVALID_MESSAGE_STATE",
+        "The proposal must be approved and delivered before it can be accepted",
+      );
 
-    const task = this.database.getTask(message.taskId);
-    invariant(task, "TASK_NOT_FOUND", `Task not found: ${message.taskId}`);
-    invariant(task.assignedTo === callerRole, "FORBIDDEN", "The task is assigned to another role");
+      const task = this.database.getTask(message.taskId);
+      invariant(task, "TASK_NOT_FOUND", `Task not found: ${message.taskId}`);
+      invariant(task.assignedTo === callerRole, "FORBIDDEN", "The task is assigned to another role");
 
-    const acknowledged = this.acknowledgeMessage(callerRole, messageId);
-    if (!["proposed", "assigned"].includes(task.status)) {
-      return { message: acknowledged, task, pendingApproval: false };
-    }
-    invariant(task.status === "assigned", "INVALID_HANDOFF", `Cannot accept a task in ${task.status} state`);
-    const started = this.updateTaskStatus(callerRole, task.taskId, "in_progress");
-    return { message: acknowledged, task: started.task, pendingApproval: started.pendingApproval };
+      const acknowledged = this.acknowledgeMessage(callerRole, messageId);
+      if (!["proposed", "assigned"].includes(task.status)) {
+        return { message: acknowledged, task, pendingApproval: false };
+      }
+      invariant(task.status === "assigned", "INVALID_HANDOFF", `Cannot accept a task in ${task.status} state`);
+      const started = this.updateTaskStatus(callerRole, task.taskId, "in_progress");
+      return { message: acknowledged, task: started.task, pendingApproval: started.pendingApproval };
+    });
   }
 
   getThreadPaginated(callerRole: string, taskId: string, options?: PaginationOptions): PaginatedResult<MessageRecord> {
@@ -509,51 +571,53 @@ export class AgentCorpBroker extends EventEmitter {
   }
 
   createArtifact(callerRole: string, input: CreateArtifactInput): ArtifactRecord {
-    const role = this.role(callerRole);
-    invariant(
-      (input.content === undefined) !== (input.contentUri === undefined),
-      "INVALID_ARTIFACT",
-      "Provide exactly one of content or contentUri",
-    );
-    if (input.content !== undefined) {
-      const contentBytes = Buffer.byteLength(input.content, "utf8");
+    return this.executeIdempotent(callerRole, "createArtifact", input.idempotencyKey, input, () => {
+      const role = this.role(callerRole);
       invariant(
-        contentBytes <= this.maxArtifactSizeBytes,
-        "ARTIFACT_TOO_LARGE",
-        `Artifact content size (${contentBytes} bytes) exceeds maximum allowed size of ${this.maxArtifactSizeBytes} bytes`,
+        (input.content === undefined) !== (input.contentUri === undefined),
+        "INVALID_ARTIFACT",
+        "Provide exactly one of content or contentUri",
       );
-    }
-    if (input.relatedTaskId) {
-      const task = this.database.getTask(input.relatedTaskId);
-      invariant(task, "TASK_NOT_FOUND", `Task not found: ${input.relatedTaskId}`);
-      this.assertTaskParticipant(task, callerRole);
-    }
+      if (input.content !== undefined) {
+        const contentBytes = Buffer.byteLength(input.content, "utf8");
+        invariant(
+          contentBytes <= this.maxArtifactSizeBytes,
+          "ARTIFACT_TOO_LARGE",
+          `Artifact content size (${contentBytes} bytes) exceeds maximum allowed size of ${this.maxArtifactSizeBytes} bytes`,
+        );
+      }
+      if (input.relatedTaskId) {
+        const task = this.database.getTask(input.relatedTaskId);
+        invariant(task, "TASK_NOT_FOUND", `Task not found: ${input.relatedTaskId}`);
+        this.assertTaskParticipant(task, callerRole);
+      }
 
-    const visibility = input.visibleToRoles ?? role.artifact_visibility;
-    if (visibility !== "all") {
-      for (const roleId of visibility) this.role(roleId);
-      invariant(
-        visibility.includes(callerRole),
-        "INVALID_VISIBILITY",
-        "The producing role must retain visibility to its artifact",
-      );
-    }
-    const contentValue = input.content ?? input.contentUri!;
-    const artifact: ArtifactRecord = {
-      artifactId: this.id("art"),
-      type: input.type,
-      name: input.name,
-      producedBy: callerRole,
-      ...(input.content === undefined ? {} : { content: input.content }),
-      ...(input.contentUri === undefined ? {} : { contentUri: input.contentUri }),
-      contentHash: createHash("sha256").update(contentValue).digest("hex"),
-      visibleToRoles: visibility,
-      relatedTaskId: input.relatedTaskId ?? null,
-      createdAt: this.timestamp(),
-    };
-    this.database.insertArtifact(artifact);
-    this.emitDomainEvent("artifact_created", artifact);
-    return artifact;
+      const visibility = input.visibleToRoles ?? role.artifact_visibility;
+      if (visibility !== "all") {
+        for (const roleId of visibility) this.role(roleId);
+        invariant(
+          visibility.includes(callerRole),
+          "INVALID_VISIBILITY",
+          "The producing role must retain visibility to its artifact",
+        );
+      }
+      const contentValue = input.content ?? input.contentUri!;
+      const artifact: ArtifactRecord = {
+        artifactId: this.id("art"),
+        type: input.type,
+        name: input.name,
+        producedBy: callerRole,
+        ...(input.content === undefined ? {} : { content: input.content }),
+        ...(input.contentUri === undefined ? {} : { contentUri: input.contentUri }),
+        contentHash: createHash("sha256").update(contentValue).digest("hex"),
+        visibleToRoles: visibility,
+        relatedTaskId: input.relatedTaskId ?? null,
+        createdAt: this.timestamp(),
+      };
+      this.database.insertArtifact(artifact);
+      this.emitDomainEvent("artifact_created", artifact);
+      return artifact;
+    });
   }
 
   private hasRemainingVisibleArtifact(
@@ -677,79 +741,82 @@ export class AgentCorpBroker extends EventEmitter {
     taskId: string,
     requestedStatus: TaskStatus,
     riskTags: string[] = [],
+    idempotencyKey?: string,
   ): { task: TaskRecord; pendingApproval: boolean } {
-    this.role(callerRole);
-    const task = this.database.getTask(taskId);
-    invariant(task, "TASK_NOT_FOUND", `Task not found: ${taskId}`);
-    this.assertTaskParticipant(task, callerRole);
-    const toStatus = TaskStatusSchema.parse(requestedStatus);
-    invariant(
-      TASK_TRANSITIONS[task.status].includes(toStatus),
-      "INVALID_TASK_TRANSITION",
-      `Task cannot transition from ${task.status} to ${toStatus}`,
-    );
+    return this.executeIdempotent(callerRole, "updateTaskStatus", idempotencyKey, { taskId, requestedStatus, riskTags }, () => {
+      this.role(callerRole);
+      const task = this.database.getTask(taskId);
+      invariant(task, "TASK_NOT_FOUND", `Task not found: ${taskId}`);
+      this.assertTaskParticipant(task, callerRole);
+      const toStatus = TaskStatusSchema.parse(requestedStatus);
+      invariant(
+        TASK_TRANSITIONS[task.status].includes(toStatus),
+        "INVALID_TASK_TRANSITION",
+        `Task cannot transition from ${task.status} to ${toStatus}`,
+      );
 
-    if (this.database.hasPendingTransition(taskId, toStatus, callerRole)) {
-      return { task, pendingApproval: true };
-    }
+      if (this.database.hasPendingTransition(taskId, toStatus, callerRole)) {
+        return { task, pendingApproval: true };
+      }
 
-    const decision = evaluatePolicy(this.database.listPolicies(), {
-      subject: "task",
-      fromRole: callerRole,
-      ...(task.assignedTo ? { toRole: task.assignedTo } : {}),
-      fromStatus: task.status,
-      toStatus,
-      riskTags: [...new Set(riskTags)].sort(),
-    });
-    invariant(
-      decision.action !== "delegate_to_role",
-      "UNSUPPORTED_POLICY",
-      "delegate_to_role policies are not implemented in v0",
-    );
-
-    const timestamp = this.timestamp();
-    if (decision.action === "auto_approve") {
-      this.database.updateTaskStatus(taskId, toStatus, timestamp);
-      const updated = this.database.getTask(taskId)!;
-      this.emitDomainEvent("task_status_changed", { taskId, status: toStatus, task: updated });
-      return { task: updated, pendingApproval: false };
-    }
-
-    const transitionId = this.id("trn");
-    const approvalId = this.id("apr");
-    this.database.transaction(() => {
-      this.database.insertTransition({
-        id: transitionId,
-        taskId,
+      const decision = evaluatePolicy(this.database.listPolicies(), {
+        subject: "task",
+        fromRole: callerRole,
+        ...(task.assignedTo ? { toRole: task.assignedTo } : {}),
         fromStatus: task.status,
         toStatus,
-        requestedBy: callerRole,
-        status: "pending",
-        createdAt: timestamp,
+        riskTags: [...new Set(riskTags)].sort(),
       });
-      this.database.insertApproval({
+      invariant(
+        decision.action !== "delegate_to_role",
+        "UNSUPPORTED_POLICY",
+        "delegate_to_role policies are not implemented in v0",
+      );
+
+      const timestamp = this.timestamp();
+      if (decision.action === "auto_approve") {
+        this.database.updateTaskStatus(taskId, toStatus, timestamp);
+        const updated = this.database.getTask(taskId)!;
+        this.emitDomainEvent("task_status_changed", { taskId, status: toStatus, task: updated });
+        return { task: updated, pendingApproval: false };
+      }
+
+      const transitionId = this.id("trn");
+      const approvalId = this.id("apr");
+      this.database.transaction(() => {
+        this.database.insertTransition({
+          id: transitionId,
+          taskId,
+          fromStatus: task.status,
+          toStatus,
+          requestedBy: callerRole,
+          status: "pending",
+          createdAt: timestamp,
+        });
+        this.database.insertApproval({
+          approvalId,
+          subject: "task",
+          subjectId: transitionId,
+          requestedBy: callerRole,
+          status: "pending",
+          context: { taskId, fromStatus: task.status, toStatus, matchedRuleId: decision.matchedRuleId },
+          createdAt: timestamp,
+          decidedAt: null,
+          decisionNote: null,
+        });
+      });
+
+      this.emitDomainEvent("approval_created", {
         approvalId,
         subject: "task",
         subjectId: transitionId,
-        requestedBy: callerRole,
-        status: "pending",
-        context: { taskId, fromStatus: task.status, toStatus, matchedRuleId: decision.matchedRuleId },
-        createdAt: timestamp,
-        decidedAt: null,
-        decisionNote: null,
+        taskId,
+        fromStatus: task.status,
+        toStatus,
       });
-    });
 
-    this.emitDomainEvent("approval_created", {
-      approvalId,
-      subject: "task",
-      subjectId: transitionId,
-      taskId,
-      fromStatus: task.status,
-      toStatus,
+      return { task, pendingApproval: true };
     });
-
-    return { task, pendingApproval: true };
   }
 
   listPendingApprovals(): PendingApproval[] {

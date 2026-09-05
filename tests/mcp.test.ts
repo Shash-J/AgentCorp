@@ -57,7 +57,7 @@ describe("AgentCorp MCP server", () => {
     try {
       const tools = await architectClient.listTools();
       const toolNames = tools.tools.map((tool) => tool.name);
-      expect(toolNames).toHaveLength(14);
+      expect(toolNames).toHaveLength(15);
       expect(toolNames).toEqual(expect.arrayContaining([
         "register_role",
         "whoami",
@@ -73,6 +73,7 @@ describe("AgentCorp MCP server", () => {
         "create_artifact",
         "list_artifacts",
         "get_artifact",
+        "get_operation",
       ]));
 
       const created = await architectClient.callTool({

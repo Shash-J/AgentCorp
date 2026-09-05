@@ -14,14 +14,14 @@ describe("migrations", () => {
     try {
       expect(getCurrentSchemaVersion(rawDb)).toBe(0);
       const result = runMigrations(rawDb);
-      expect(result.applied).toEqual([1, 2, 3, 4, 5]);
-      expect(result.currentVersion).toBe(5);
-      expect(getCurrentSchemaVersion(rawDb)).toBe(5);
+      expect(result.applied).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(result.currentVersion).toBe(6);
+      expect(getCurrentSchemaVersion(rawDb)).toBe(6);
 
       // Re-running migrations is idempotent
       const rerun = runMigrations(rawDb);
       expect(rerun.applied).toEqual([]);
-      expect(rerun.currentVersion).toBe(5);
+      expect(rerun.currentVersion).toBe(6);
     } finally {
       rawDb.close();
     }
@@ -44,7 +44,7 @@ describe("migrations", () => {
   it("initializes schema properly via AgentCorpDatabase", () => {
     const db = new AgentCorpDatabase(":memory:");
     try {
-      expect(db.getSchemaVersion()).toBe(5);
+      expect(db.getSchemaVersion()).toBe(6);
       expect(db.listAllTasks()).toEqual([]);
       expect(db.listAllMessages()).toEqual([]);
       expect(db.listAllApprovals()).toEqual([]);
@@ -67,8 +67,8 @@ describe("migrations", () => {
 
       // Run migrations; ensureMigrationTable must detect missing name column and alter it safely
       const result = runMigrations(rawDb);
-      expect(result.applied).toEqual([1, 2, 3, 4, 5]);
-      expect(result.currentVersion).toBe(5);
+      expect(result.applied).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(result.currentVersion).toBe(6);
 
       const cols = rawDb.prepare("PRAGMA table_info(schema_migrations)").all() as Array<{ name: string }>;
       expect(cols.some((c) => c.name === "name")).toBe(true);
@@ -166,6 +166,29 @@ describe("migrations", () => {
       expect(policy?.to_status).toBe("awaiting_review");
       expect(policy?.action).toBe("auto_approve");
       expect(policy?.priority).toBe(150);
+    } finally {
+      rawDb.close();
+    }
+  });
+
+  it("migration 6 creates idempotency_keys table and adds last_seen_at column to role_bindings", () => {
+    const rawDb = new DatabaseSync(":memory:");
+    try {
+      MIGRATIONS[0]!.up(rawDb);
+      MIGRATIONS[1]!.up(rawDb);
+      MIGRATIONS[2]!.up(rawDb);
+      MIGRATIONS[3]!.up(rawDb);
+      MIGRATIONS[4]!.up(rawDb);
+      MIGRATIONS[5]!.up(rawDb);
+
+      const tables = rawDb.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>;
+      expect(tables.map((t) => t.name)).toContain("idempotency_keys");
+
+      const indexes = rawDb.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>;
+      expect(indexes.map((i) => i.name)).toContain("idx_idempotency_role");
+
+      const cols = rawDb.prepare("PRAGMA table_info(role_bindings)").all() as Array<{ name: string }>;
+      expect(cols.map((c) => c.name)).toContain("last_seen_at");
     } finally {
       rawDb.close();
     }

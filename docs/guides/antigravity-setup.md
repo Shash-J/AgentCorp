@@ -56,30 +56,29 @@ Add the `agentcorp` server entry to the `mcpServers` object, binding it to the `
 
 1. **Auto-Spawning**: When Antigravity initializes, the stdio adapter checks if the AgentCorp daemon is active. If not, it automatically spawns the central daemon in the background.
 2. **Identity Lockdown**: The adapter automatically loads the `developer` bearer token from `.agentcorp/credentials.json`. Antigravity's agent identity is cryptographically enforced and cannot be spoofed.
-3. **Tool Injection**: Antigravity automatically registers the 14 AgentCorp tools, including:
-   - `whoami`
-   - `list_tasks`
-   - `get_inbox`
-   - `get_work_queue`
-   - `accept_handoff`
-   - `send_message`
-   - `create_artifact`
-   - etc.
+3. **Tool Injection**: Antigravity automatically registers the 15 AgentCorp tools, including:
+   - `whoami`, `register_role`
+   - `list_tasks`, `create_task`, `update_task_status`
+   - `get_inbox`, `send_message`, `acknowledge_message`, `accept_handoff`, `get_thread`
+   - `get_work_queue` (combines active tasks, unread messages, presence, and next actions)
+   - `create_artifact`, `list_artifacts`, `get_artifact`
+   - `get_operation` (lookup results of idempotent operations)
+4. **Self-Healing Proxy**: The stdio proxy features auto-reconnection with bounded exponential backoff. If the central broker restarts, Antigravity's in-flight session recovers seamlessly.
+5. **Idempotency & Zero Duplication**: Mutations accept `idempotency_key`. Retried network requests replay the exact cached outcome without creating duplicate tasks, messages, or approvals.
 
 ---
 
-## 4. Example Agent Prompt
+## 4. Example Agent Prompt & Handoff Best Practices
 
 Once configured, you can prompt the Antigravity agent in the sidebar chat:
 
 > *"Call `get_work_queue` and follow the highest-priority applicable next action. Use `accept_handoff` for an approved task proposal."*
 
-The agent can now discover and accept a handoff with two coordination calls instead of separately reading the inbox, listing tasks, acknowledging the proposal, and updating task status.
-
-Add the example prompt as a standing agent instruction so it runs at session
-start. AgentCorp cannot wake an idle Antigravity model by itself; that requires
-host support or a future notification adapter.
+### Coordination Guidelines:
+- **Standing Instructions**: Add the prompt above as a standing instruction at session start. MCP cannot wake an idle agent model autonomously.
+- **Lightweight Handoffs**: Coordinate using concise IDs and summaries (`taskId`, `messageId`, diff summary). Do not dump large file trees or bulk artifacts into chat prompts; read artifacts on demand with `get_artifact`.
 
 After upgrading AgentCorp or changing authentication settings, rebuild the
-package, restart the daemon, and restart the IDE's MCP connection. Existing
+package (`npm run build`), restart the daemon (`agentcorp stop && agentcorp start`),
+and restart the IDE's MCP connection if new tools are added. Existing
 stdio processes continue running their previously loaded adapter code.

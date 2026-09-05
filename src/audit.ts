@@ -2,13 +2,14 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { AgentCorpBroker } from "./broker.js";
 import { DEFAULT_AUDIT_LIMIT, MAX_AUDIT_LIMIT, parseLimit } from "./database.js";
-import type {
-  ArtifactRecord,
-  AuditExportOptions,
-  AuditSnapshotMetadata,
-  MessageRecord,
-  PendingApproval,
-  TaskRecord,
+import {
+  DEFAULT_MAX_AUDIT_PAYLOAD_BYTES,
+  type ArtifactRecord,
+  type AuditExportOptions,
+  type AuditSnapshotMetadata,
+  type MessageRecord,
+  type PendingApproval,
+  type TaskRecord,
 } from "./types.js";
 
 export interface AuditSnapshot {
@@ -61,19 +62,23 @@ export function generateAuditSnapshot(
     limit: effectiveLimit,
   };
 
+  const effectiveMaxPayloadBytes = options.maxPayloadBytes !== undefined
+    ? options.maxPayloadBytes
+    : (broker.config.limits?.max_audit_payload_bytes ?? DEFAULT_MAX_AUDIT_PAYLOAD_BYTES);
+
   const tasks = db.getAuditTasks(exportOptions);
   const rawMessages = db.getAuditMessages(exportOptions);
-  const messages = options.maxPayloadBytes && options.maxPayloadBytes > 0
+  const messages = effectiveMaxPayloadBytes && effectiveMaxPayloadBytes > 0
     ? rawMessages.map((msg) => {
         const payloadStr = typeof msg.payload === "string" ? msg.payload : JSON.stringify(msg.payload);
         const byteLen = Buffer.byteLength(payloadStr, "utf8");
-        if (byteLen > options.maxPayloadBytes!) {
+        if (byteLen > effectiveMaxPayloadBytes) {
           return {
             ...msg,
             payload: {
               _truncated: true,
               byteLength: byteLen,
-              preview: payloadStr.slice(0, Math.min(256, options.maxPayloadBytes!)) + "... [truncated]",
+              preview: payloadStr.slice(0, Math.min(256, effectiveMaxPayloadBytes)) + "... [truncated]",
             },
           };
         }
@@ -83,12 +88,12 @@ export function generateAuditSnapshot(
 
   const approvals = db.getAuditApprovals(exportOptions);
   const rawArtifacts = db.getAuditArtifacts(exportOptions);
-  const artifacts = options.maxPayloadBytes && options.maxPayloadBytes > 0
+  const artifacts = effectiveMaxPayloadBytes && effectiveMaxPayloadBytes > 0
     ? rawArtifacts.map((art) => {
-        if (art.content && Buffer.byteLength(art.content, "utf8") > options.maxPayloadBytes!) {
+        if (art.content && Buffer.byteLength(art.content, "utf8") > effectiveMaxPayloadBytes) {
           return {
             ...art,
-            content: art.content.slice(0, Math.min(256, options.maxPayloadBytes!)) + "... [truncated]",
+            content: art.content.slice(0, Math.min(256, effectiveMaxPayloadBytes)) + "... [truncated]",
           };
         }
         return art;
@@ -106,7 +111,7 @@ export function generateAuditSnapshot(
     generatedAt: new Date().toISOString(),
     ...(options.since ? { since: options.since } : {}),
     limit: effectiveLimit,
-    ...(options.maxPayloadBytes !== undefined ? { maxPayloadBytes: options.maxPayloadBytes } : {}),
+    maxPayloadBytes: effectiveMaxPayloadBytes,
     totalTasksAvailable,
     totalMessagesAvailable,
     totalApprovalsAvailable,
