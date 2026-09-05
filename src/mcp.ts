@@ -62,7 +62,10 @@ export function createMcpServer(
       description: "Return the immutable role identity and permissions for this MCP connection.",
       inputSchema: z.object({}),
     },
-    () => guarded(() => ({ role, agentId, company: broker.config.company.name })),
+    () => guarded(() => {
+      broker.touchPresence(callerRole);
+      return { role, agentId, company: broker.config.company.name };
+    }),
   );
 
   server.registerTool(

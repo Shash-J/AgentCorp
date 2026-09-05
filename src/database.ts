@@ -176,19 +176,28 @@ export class AgentCorpDatabase {
 
   transaction<T>(operation: () => T): T {
     if (this.transactionDepth > 0) {
-      return operation();
+      this.transactionDepth++;
+      try {
+        return operation();
+      } finally {
+        this.transactionDepth--;
+      }
     }
-    this.transactionDepth++;
     this.db.exec("BEGIN IMMEDIATE");
+    this.transactionDepth = 1;
     try {
       const result = operation();
       this.db.exec("COMMIT");
       return result;
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // Suppress rollback error if already rolled back
+      }
       throw error;
     } finally {
-      this.transactionDepth--;
+      this.transactionDepth = 0;
     }
   }
 
@@ -344,7 +353,7 @@ export class AgentCorpDatabase {
 
   saveIdempotency(record: IdempotencyRecord): void {
     this.db.prepare(`
-      INSERT OR REPLACE INTO idempotency_keys (role_id, key, operation, request_hash, response_json, created_at)
+      INSERT INTO idempotency_keys (role_id, key, operation, request_hash, response_json, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(
       record.roleId,
@@ -1297,15 +1306,15 @@ export class AgentCorpDatabase {
       query = `SELECT 
         message_id, task_id, from_role, to_role, type,
         CASE 
-          WHEN LENGTH(payload) > ? THEN SUBSTR(payload, 1, ?)
+          WHEN OCTET_LENGTH(payload) > ? THEN CAST(SUBSTR(CAST(payload AS BLOB), 1, ?) AS TEXT)
           ELSE payload 
         END AS payload,
-        LENGTH(payload) AS payload_full_length,
+        OCTET_LENGTH(payload) AS payload_full_length,
         references_json, in_reply_to, status, risk_tags, created_at, resolved_at
       FROM messages`;
       params.push(maxBytes, maxBytes);
     } else {
-      query = "SELECT *, LENGTH(payload) AS payload_full_length FROM messages";
+      query = "SELECT *, OCTET_LENGTH(payload) AS payload_full_length FROM messages";
     }
 
     if (options?.since) {
@@ -1345,8 +1354,25 @@ export class AgentCorpDatabase {
 
   getAuditApprovals(options?: AuditExportOptions): PendingApproval[] {
     const limit = parseLimit(options?.limit, DEFAULT_AUDIT_LIMIT, MAX_AUDIT_LIMIT);
-    let query = "SELECT * FROM approvals";
+    const maxBytes = options?.maxPayloadBytes;
     const params: Array<string | number> = [];
+    
+    let query: string;
+    if (maxBytes !== undefined && maxBytes > 0) {
+      query = `SELECT 
+        approval_id, subject, subject_id, requested_by, status,
+        CASE 
+          WHEN context IS NOT NULL AND OCTET_LENGTH(context) > ? THEN CAST(SUBSTR(CAST(context AS BLOB), 1, ?) AS TEXT)
+          ELSE context 
+        END AS context,
+        CASE WHEN context IS NOT NULL THEN OCTET_LENGTH(context) ELSE NULL END AS context_full_length,
+        created_at, decided_at, decision_note, edited_payload
+      FROM approvals`;
+      params.push(maxBytes, maxBytes);
+    } else {
+      query = "SELECT *, CASE WHEN context IS NOT NULL THEN OCTET_LENGTH(context) ELSE NULL END AS context_full_length FROM approvals";
+    }
+
     if (options?.since) {
       query += " WHERE created_at >= ?";
       params.push(options.since);
@@ -1354,7 +1380,27 @@ export class AgentCorpDatabase {
     query += " ORDER BY created_at DESC, approval_id DESC LIMIT ?";
     params.push(limit);
     const rows = this.db.prepare(query).all(...params) as Row[];
-    const items = rows.map(mapApproval);
+    const items = rows.map((r) => {
+      const fullLen = typeof r.context_full_length === "number" ? r.context_full_length : 0;
+      if (maxBytes !== undefined && maxBytes > 0 && fullLen > maxBytes) {
+        return {
+          approvalId: String(r.approval_id),
+          subject: String(r.subject) as PendingApproval["subject"],
+          subjectId: String(r.subject_id),
+          requestedBy: String(r.requested_by),
+          status: String(r.status) as PendingApproval["status"],
+          context: {
+            _truncated: true,
+            byteLength: fullLen,
+            preview: (typeof r.context === "string" ? r.context.slice(0, Math.min(256, maxBytes)) : "") + "... [truncated]",
+          },
+          createdAt: String(r.created_at),
+          decidedAt: r.decided_at ? String(r.decided_at) : null,
+          decisionNote: r.decision_note ? String(r.decision_note) : null,
+        };
+      }
+      return mapApproval(r);
+    });
     items.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.approvalId.localeCompare(b.approvalId));
     return items;
   }
@@ -1369,15 +1415,15 @@ export class AgentCorpDatabase {
       query = `SELECT
         artifact_id, type, name, produced_by, content_hash,
         CASE
-          WHEN content IS NOT NULL AND LENGTH(content) > ? THEN SUBSTR(content, 1, ?)
+          WHEN content IS NOT NULL AND OCTET_LENGTH(content) > ? THEN CAST(SUBSTR(CAST(content AS BLOB), 1, ?) AS TEXT)
           ELSE content
         END AS content,
-        CASE WHEN content IS NOT NULL THEN LENGTH(content) ELSE NULL END AS content_full_length,
+        CASE WHEN content IS NOT NULL THEN OCTET_LENGTH(content) ELSE NULL END AS content_full_length,
         content_uri, visible_to_roles, related_task_id, created_at
       FROM artifacts`;
       params.push(maxBytes, maxBytes);
     } else {
-      query = "SELECT *, CASE WHEN content IS NOT NULL THEN LENGTH(content) ELSE NULL END AS content_full_length FROM artifacts";
+      query = "SELECT *, CASE WHEN content IS NOT NULL THEN OCTET_LENGTH(content) ELSE NULL END AS content_full_length FROM artifacts";
     }
 
     if (options?.since) {

@@ -129,17 +129,19 @@ export class AgentCorpBroker extends EventEmitter {
     return this.now().toISOString();
   }
 
-  private role(roleId: string, touchPresence = true): RoleDefinition {
+  private role(roleId: string): RoleDefinition {
     const role = this.roles.get(roleId);
     invariant(role, "UNKNOWN_ROLE", `Unknown role: ${roleId}`);
-    if (touchPresence) {
-      try {
-        this.database.touchRolePresence(roleId, this.timestamp());
-      } catch {
-        // Non-critical if table or column not yet migrated
-      }
-    }
     return role;
+  }
+
+  touchPresence(callerRole: string): void {
+    this.role(callerRole);
+    try {
+      this.database.touchRolePresence(callerRole, this.timestamp());
+    } catch {
+      // Non-critical if table or column not yet migrated
+    }
   }
 
   private executeIdempotent<T>(
@@ -149,30 +151,32 @@ export class AgentCorpBroker extends EventEmitter {
     requestPayload: unknown,
     fn: () => T,
   ): T {
+    this.touchPresence(callerRole);
     if (!idempotencyKey) {
       return fn();
     }
     const currentHash = createHash("sha256")
       .update(JSON.stringify(requestPayload ?? null))
       .digest("hex");
-    const existing = this.database.getIdempotency(idempotencyKey, callerRole);
-    if (existing) {
-      if (existing.operation !== operation) {
-        throw new AgentCorpError(
-          "IDEMPOTENCY_CONFLICT",
-          `Idempotency key '${idempotencyKey}' was already used for operation '${existing.operation}', cannot reuse for '${operation}'`,
-        );
-      }
-      if (existing.requestHash && existing.requestHash !== currentHash) {
-        throw new AgentCorpError(
-          "IDEMPOTENCY_CONFLICT",
-          `Idempotency key '${idempotencyKey}' was already used with a different request payload`,
-        );
-      }
-      return JSON.parse(existing.responseJson) as T;
-    }
 
     return this.database.transaction(() => {
+      const existing = this.database.getIdempotency(idempotencyKey, callerRole);
+      if (existing) {
+        if (existing.operation !== operation) {
+          throw new AgentCorpError(
+            "IDEMPOTENCY_CONFLICT",
+            `Idempotency key '${idempotencyKey}' was already used for operation '${existing.operation}', cannot reuse for '${operation}'`,
+          );
+        }
+        if (existing.requestHash && existing.requestHash !== currentHash) {
+          throw new AgentCorpError(
+            "IDEMPOTENCY_CONFLICT",
+            `Idempotency key '${idempotencyKey}' was already used with a different request payload`,
+          );
+        }
+        return JSON.parse(existing.responseJson) as T;
+      }
+
       const result = fn();
       this.database.saveIdempotency({
         key: idempotencyKey,
@@ -187,7 +191,7 @@ export class AgentCorpBroker extends EventEmitter {
   }
 
   getOperation(callerRole: string, key: string): IdempotencyRecord | undefined {
-    this.role(callerRole);
+    this.touchPresence(callerRole);
     return this.database.getIdempotency(key, callerRole);
   }
 
@@ -214,6 +218,7 @@ export class AgentCorpBroker extends EventEmitter {
   }
 
   registerRole(roleId: string, agentId: string, declaredCapabilities: string[]): RoleDefinition {
+    this.touchPresence(roleId);
     const role = this.role(roleId);
     const undeclared = declaredCapabilities.filter((capability) => !role.capabilities.includes(capability));
     invariant(
@@ -255,12 +260,12 @@ export class AgentCorpBroker extends EventEmitter {
   }
 
   listTasksPaginated(callerRole: string, options?: PaginationOptions): PaginatedResult<TaskRecord> {
-    this.role(callerRole);
+    this.touchPresence(callerRole);
     return this.database.listTasksForRolePaginated(callerRole, options);
   }
 
   listTasks(callerRole: string, options?: PaginationOptions): TaskRecord[] {
-    this.role(callerRole);
+    this.touchPresence(callerRole);
     return this.database.listTasksForRole(callerRole, options);
   }
 
@@ -390,17 +395,17 @@ export class AgentCorpBroker extends EventEmitter {
   }
 
   getInboxPaginated(callerRole: string, options?: PaginationOptions): PaginatedResult<MessageRecord> {
-    this.role(callerRole);
+    this.touchPresence(callerRole);
     return this.database.listInboxPaginated(callerRole, options);
   }
 
   getInbox(callerRole: string, options?: PaginationOptions): MessageRecord[] {
-    this.role(callerRole);
+    this.touchPresence(callerRole);
     return this.database.listInbox(callerRole, options);
   }
 
   getWorkQueue(callerRole: string): RoleWorkQueue {
-    this.role(callerRole);
+    this.touchPresence(callerRole);
     const unreadMessages = this.getInbox(callerRole);
     const activeTasks = this.listTasks(callerRole).filter((task) =>
       !["completed", "failed", "cancelled"].includes(task.status));
@@ -516,6 +521,7 @@ export class AgentCorpBroker extends EventEmitter {
   }
 
   acknowledgeMessage(callerRole: string, messageId: string): MessageRecord {
+    this.touchPresence(callerRole);
     const message = this.database.getMessage(messageId);
     invariant(message, "MESSAGE_NOT_FOUND", `Message not found: ${messageId}`);
     invariant(message.toRole === callerRole, "FORBIDDEN", "Only the recipient can acknowledge a message");
@@ -569,7 +575,7 @@ export class AgentCorpBroker extends EventEmitter {
   }
 
   getThreadPaginated(callerRole: string, taskId: string, options?: PaginationOptions): PaginatedResult<MessageRecord> {
-    this.role(callerRole);
+    this.touchPresence(callerRole);
     const task = this.database.getTask(taskId);
     invariant(task, "TASK_NOT_FOUND", `Task not found: ${taskId}`);
     this.assertTaskParticipant(task, callerRole);
@@ -577,7 +583,7 @@ export class AgentCorpBroker extends EventEmitter {
   }
 
   getThread(callerRole: string, taskId: string, options?: PaginationOptions): MessageRecord[] {
-    this.role(callerRole);
+    this.touchPresence(callerRole);
     const task = this.database.getTask(taskId);
     invariant(task, "TASK_NOT_FOUND", `Task not found: ${taskId}`);
     this.assertTaskParticipant(task, callerRole);
@@ -661,7 +667,7 @@ export class AgentCorpBroker extends EventEmitter {
     taskIdOrOptions?: string | PaginationOptions,
     maybeOptions?: PaginationOptions,
   ): PaginatedResult<ArtifactRecord> {
-    this.role(callerRole);
+    this.touchPresence(callerRole);
     let taskId: string | null = null;
     let options: PaginationOptions | undefined;
     if (typeof taskIdOrOptions === "string") {
@@ -743,7 +749,7 @@ export class AgentCorpBroker extends EventEmitter {
   }
 
   getArtifact(callerRole: string, artifactId: string): ArtifactRecord {
-    this.role(callerRole);
+    this.touchPresence(callerRole);
     const artifact = this.database.getArtifact(artifactId, true);
     invariant(artifact, "ARTIFACT_NOT_FOUND", `Artifact not found: ${artifactId}`);
     this.assertArtifactVisible(artifact, callerRole);

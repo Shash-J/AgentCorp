@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
@@ -101,6 +101,87 @@ export async function isDaemonHealthy(url: string): Promise<boolean> {
   }
 }
 
+const inFlightSpawns = new Map<string, Promise<DaemonInfo>>();
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function acquireStartupLock(
+  lockFilePath: string,
+  daemonFilePath: string,
+  maxWaitMs = 10000,
+): Promise<(() => void) | null> {
+  const start = Date.now();
+  mkdirSync(dirname(lockFilePath), { recursive: true });
+
+  while (Date.now() - start < maxWaitMs) {
+    const current = readDaemonInfo(daemonFilePath);
+    if (current && (await isDaemonHealthy(current.url))) {
+      return null;
+    }
+
+    try {
+      const fd = openSync(lockFilePath, "wx");
+      const data = JSON.stringify({ pid: process.pid, createdAt: Date.now() });
+      writeFileSync(fd, data, "utf8");
+      closeSync(fd);
+
+      return () => {
+        try {
+          if (existsSync(lockFilePath)) {
+            unlinkSync(lockFilePath);
+          }
+        } catch {
+          // Best effort
+        }
+      };
+    } catch (err: any) {
+      if (err?.code === "EEXIST") {
+        let isStale = false;
+        try {
+          const raw = readFileSync(lockFilePath, "utf8");
+          const info = JSON.parse(raw) as { pid: number; createdAt: number };
+          const age = Date.now() - (info.createdAt ?? 0);
+          if (info.pid !== process.pid && (!isProcessAlive(info.pid) || age > 12000)) {
+            isStale = true;
+          }
+        } catch {
+          isStale = true;
+        }
+
+        if (isStale) {
+          try {
+            unlinkSync(lockFilePath);
+          } catch {
+            // Ignore race
+          }
+          continue;
+        }
+
+        await new Promise((r) => setTimeout(r, 100));
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  const current = readDaemonInfo(daemonFilePath);
+  if (current && (await isDaemonHealthy(current.url))) {
+    return null;
+  }
+
+  throw new AgentCorpError(
+    "DAEMON_SPAWN_FAILED",
+    "Timed out waiting for concurrent daemon startup lock to be released.",
+  );
+}
+
 export async function ensureDaemonRunning(options: {
   configPath?: string | undefined;
   dbPath?: string | undefined;
@@ -122,34 +203,68 @@ export async function ensureDaemonRunning(options: {
     );
   }
 
-  const cliPath = resolveCliPath();
-  const args = [cliPath, "start", "--port", options.port !== undefined ? String(options.port) : "0"];
-  if (options.configPath) args.push("--config", resolve(options.configPath));
-  if (options.dbPath) args.push("--db", resolve(options.dbPath));
-  if (options.daemonFilePath) args.push("--daemon-file", resolve(options.daemonFilePath));
-  if (options.credentialsPath) args.push("--credentials", resolve(options.credentialsPath));
-
-  const child = spawn(process.execPath, args, {
-    detached: true,
-    stdio: "ignore",
-    env: process.env,
-  });
-  child.unref();
-
-  // Wait for daemon to become healthy within 6 seconds
-  const start = Date.now();
-  while (Date.now() - start < 6000) {
-    await new Promise((r) => setTimeout(r, 150));
-    const info = readDaemonInfo(daemonFilePath);
-    if (info && (await isDaemonHealthy(info.url))) {
-      return info;
-    }
+  const inFlight = inFlightSpawns.get(daemonFilePath);
+  if (inFlight) {
+    return inFlight;
   }
 
-  throw new AgentCorpError(
-    "DAEMON_SPAWN_FAILED",
-    "Timed out waiting for AgentCorp daemon to start in the background.",
-  );
+  const spawnPromise = (async () => {
+    const lockFilePath = `${daemonFilePath}.lock`;
+    const unlock = await acquireStartupLock(lockFilePath, daemonFilePath);
+    if (!unlock) {
+      const running = readDaemonInfo(daemonFilePath);
+      if (running && (await isDaemonHealthy(running.url))) {
+        return running;
+      }
+    }
+
+    try {
+      const afterLock = readDaemonInfo(daemonFilePath);
+      if (afterLock && (await isDaemonHealthy(afterLock.url))) {
+        return afterLock;
+      }
+
+      const cliPath = resolveCliPath();
+      const args = [cliPath, "start", "--port", options.port !== undefined ? String(options.port) : "0"];
+      if (options.configPath) args.push("--config", resolve(options.configPath));
+      if (options.dbPath) args.push("--db", resolve(options.dbPath));
+      if (options.daemonFilePath) args.push("--daemon-file", resolve(options.daemonFilePath));
+      if (options.credentialsPath) args.push("--credentials", resolve(options.credentialsPath));
+
+      const child = spawn(process.execPath, args, {
+        detached: true,
+        stdio: "ignore",
+        env: process.env,
+      });
+      child.unref();
+
+      // Wait for daemon to become healthy within 8 seconds
+      const start = Date.now();
+      while (Date.now() - start < 8000) {
+        await new Promise((r) => setTimeout(r, 150));
+        const info = readDaemonInfo(daemonFilePath);
+        if (info && (await isDaemonHealthy(info.url))) {
+          return info;
+        }
+      }
+
+      throw new AgentCorpError(
+        "DAEMON_SPAWN_FAILED",
+        "Timed out waiting for AgentCorp daemon to start in the background.",
+      );
+    } finally {
+      if (unlock) {
+        unlock();
+      }
+    }
+  })();
+
+  inFlightSpawns.set(daemonFilePath, spawnPromise);
+  try {
+    return await spawnPromise;
+  } finally {
+    inFlightSpawns.delete(daemonFilePath);
+  }
 }
 
 export class ResilientDaemonClient {

@@ -417,7 +417,7 @@ program
     const server = new AgentCorpServer(broker, creds, {
       port: parseInt(options.port, 10),
       host: options.host,
-      ...(options.daemonFile !== undefined ? { daemonFilePath: options.daemonFile } : {}),
+      daemonFilePath: options.daemonFile ? resolve(options.daemonFile) : resolve(".agentcorp/daemon.json"),
     });
 
     const daemonLogger = new RotatingLogger(".agentcorp/daemon.log");

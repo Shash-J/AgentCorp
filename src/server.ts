@@ -142,7 +142,7 @@ export class AgentCorpServer {
     if (options.host !== undefined) this.host = options.host;
     this.daemonFilePath = options.daemonFilePath !== undefined
       ? (options.daemonFilePath ? resolve(options.daemonFilePath) : null)
-      : resolve(".agentcorp/daemon.json");
+      : null;
     this.auditOnShutdown = options.auditOnShutdown ?? true;
     this.maxBodySizeBytes = options.maxBodySizeBytes ?? broker.config.limits?.max_request_body_bytes ?? DEFAULT_MAX_BODY_SIZE_BYTES;
     this.broker.on("event", this.eventListener);
@@ -170,6 +170,25 @@ export class AgentCorpServer {
   async start(): Promise<DaemonInfo> {
     if (this.server) {
       throw new AgentCorpError("SERVER_ALREADY_RUNNING", "Server is already running");
+    }
+
+    if (this.daemonFilePath && existsSync(this.daemonFilePath)) {
+      const existing = readDaemonInfo(this.daemonFilePath);
+      if (existing && existing.pid !== process.pid) {
+        let isAlive = false;
+        try {
+          process.kill(existing.pid, 0);
+          isAlive = true;
+        } catch {
+          isAlive = false;
+        }
+        if (isAlive) {
+          throw new AgentCorpError(
+            "DAEMON_ALREADY_RUNNING",
+            `AgentCorp daemon is already running for this project (PID: ${existing.pid}, URL: ${existing.url})`,
+          );
+        }
+      }
     }
 
     const server = createServer((req, res) => {
@@ -261,7 +280,10 @@ export class AgentCorpServer {
 
     if (this.daemonFilePath && existsSync(this.daemonFilePath)) {
       try {
-        unlinkSync(this.daemonFilePath);
+        const current = readDaemonInfo(this.daemonFilePath);
+        if (!current || current.pid === process.pid) {
+          unlinkSync(this.daemonFilePath);
+        }
       } catch {
         // Best effort
       }
