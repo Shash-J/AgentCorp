@@ -5,7 +5,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
-## [0.1.0-alpha.1] — 2026-09-05
+## [0.1.0-alpha.1] — Unreleased
 
 Initial public developer preview release of AgentCorp: a local-first coordination broker for teams of AI agents.
 

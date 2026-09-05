@@ -140,5 +140,54 @@ describe("audit", () => {
     expect(rowTruncatedSnapshot.metadata.truncated).toBe(true);
     expect(rowTruncatedSnapshot.metadata.fieldClippingActive).toBe(false);
   });
-});
 
+  it("preserves UTF-8 boundaries and does not infer clipping from marker-like content", () => {
+    const budget = 64;
+    const emoji = "\u{1F680}";
+    const clippedTask = broker.createTask("architect", {
+      title: "Unicode task",
+      description: emoji.repeat(100),
+    });
+    const literalMarkerTask = broker.createTask("architect", {
+      title: "Literal marker task",
+      description: "This text legitimately ends with... [truncated]",
+    });
+    broker.sendMessage("architect", {
+      toRole: "developer",
+      type: "report",
+      payload: { text: emoji.repeat(100) },
+      taskId: clippedTask.taskId,
+    });
+    const artifact = broker.createArtifact("architect", {
+      name: "unicode.txt",
+      type: "evidence",
+      content: emoji.repeat(100),
+      relatedTaskId: clippedTask.taskId,
+    });
+
+    const snapshot = generateAuditSnapshot(broker, {
+      limit: 100,
+      maxPayloadBytes: budget,
+    });
+    const auditedTask = snapshot.tasks.find((task) => task.taskId === clippedTask.taskId)!;
+    const literalTask = snapshot.tasks.find((task) => task.taskId === literalMarkerTask.taskId)!;
+    const auditedMessage = snapshot.messages.find((message) => message.taskId === clippedTask.taskId)!;
+    const auditedArtifact = snapshot.artifacts.find((item) => item.artifactId === artifact.artifactId)!;
+    const messagePreview = (auditedMessage.payload as { preview: string }).preview;
+
+    expect(auditedTask.descriptionClipped).toBe(true);
+    expect(auditedTask.descriptionByteLength).toBe(Buffer.byteLength(emoji.repeat(100), "utf8"));
+    expect(Buffer.byteLength(auditedTask.description!, "utf8")).toBeLessThanOrEqual(budget);
+    expect(auditedTask.description).not.toContain("\uFFFD");
+    expect(literalTask.descriptionClipped).toBeUndefined();
+    expect(messagePreview).not.toContain("\uFFFD");
+    expect(Buffer.byteLength(messagePreview, "utf8")).toBeLessThanOrEqual(budget);
+    expect(auditedArtifact.contentClipped).toBe(true);
+    expect(auditedArtifact.contentByteLength).toBe(Buffer.byteLength(emoji.repeat(100), "utf8"));
+    expect(auditedArtifact.content).not.toContain("\uFFFD");
+    expect(Buffer.byteLength(auditedArtifact.content!, "utf8")).toBeLessThanOrEqual(budget);
+    expect(snapshot.metadata.fieldClippedRecordsCount?.tasks).toBe(1);
+    expect(snapshot.metadata.fieldClippedRecordsCount?.messages).toBe(1);
+    expect(snapshot.metadata.fieldClippedRecordsCount?.artifacts).toBe(1);
+  });
+});

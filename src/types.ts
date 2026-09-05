@@ -155,6 +155,11 @@ export interface TaskRecord {
   updatedAt: string;
 }
 
+export interface AuditTaskRecord extends TaskRecord {
+  descriptionClipped?: boolean | undefined;
+  descriptionByteLength?: number | undefined;
+}
+
 export type WorkQueueActionKind =
   | "accept_handoff"
   | "acknowledge_message"
@@ -201,6 +206,11 @@ export interface ArtifactRecord {
   visibleToRoles: "all" | string[];
   relatedTaskId: string | null;
   createdAt: string;
+}
+
+export interface AuditArtifactRecord extends ArtifactRecord {
+  contentClipped?: boolean | undefined;
+  contentByteLength?: number | undefined;
 }
 
 export interface PolicyRule extends InitialPolicy {

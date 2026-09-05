@@ -4,12 +4,12 @@ import type { AgentCorpBroker } from "./broker.js";
 import { DEFAULT_AUDIT_LIMIT, MAX_AUDIT_LIMIT, parseLimit } from "./database.js";
 import {
   DEFAULT_MAX_AUDIT_PAYLOAD_BYTES,
-  type ArtifactRecord,
+  type AuditArtifactRecord,
   type AuditExportOptions,
   type AuditSnapshotMetadata,
+  type AuditTaskRecord,
   type MessageRecord,
   type PendingApproval,
-  type TaskRecord,
 } from "./types.js";
 
 export interface AuditSnapshot {
@@ -23,10 +23,10 @@ export interface AuditSnapshot {
     allowedPeers: string[];
     boundAgent?: string | undefined;
   }>;
-  tasks: TaskRecord[];
+  tasks: AuditTaskRecord[];
   messages: MessageRecord[];
   approvals: PendingApproval[];
-  artifacts: ArtifactRecord[];
+  artifacts: AuditArtifactRecord[];
 }
 
 export function generateAuditSnapshot(
@@ -82,7 +82,7 @@ export function generateAuditSnapshot(
 
   let clippedTasksCount = 0;
   for (const t of tasks) {
-    if (typeof t.description === "string" && t.description.endsWith("... [truncated]")) {
+    if (t.descriptionClipped === true) {
       clippedTasksCount++;
     }
   }
@@ -103,7 +103,7 @@ export function generateAuditSnapshot(
 
   let clippedArtifactsCount = 0;
   for (const art of artifacts) {
-    if (typeof art.content === "string" && art.content.endsWith("... [truncated]")) {
+    if (art.contentClipped === true) {
       clippedArtifactsCount++;
     }
   }

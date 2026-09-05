@@ -5,7 +5,9 @@ import { DatabaseSync } from "node:sqlite";
 import { getCurrentSchemaVersion, runMigrations } from "./migrations.js";
 import type {
   ArtifactRecord,
+  AuditArtifactRecord,
   AuditExportOptions,
+  AuditTaskRecord,
   IdempotencyRecord,
   InitialPolicy,
   MaintenanceLogRecord,
@@ -56,6 +58,39 @@ export function parseLimit(limit?: number, defaultLimit = DEFAULT_PAGE_LIMIT, ma
 }
 
 type Row = Record<string, unknown>;
+
+const AUDIT_TRUNCATION_MARKER = "... [truncated]";
+const MAX_AUDIT_PREVIEW_BYTES = 256;
+
+function auditPreviewPrefixBytes(totalBudget: number): number {
+  return Math.max(0, totalBudget - Buffer.byteLength(AUDIT_TRUNCATION_MARKER, "utf8"));
+}
+
+function decodeUtf8Prefix(value: unknown, maxBytes: number): string {
+  if (maxBytes <= 0 || value === null || value === undefined) return "";
+  const bytes = value instanceof Uint8Array
+    ? Buffer.from(value.buffer, value.byteOffset, value.byteLength)
+    : Buffer.from(String(value), "utf8");
+  let end = Math.min(maxBytes, bytes.byteLength);
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  while (end > 0) {
+    try {
+      return decoder.decode(bytes.subarray(0, end));
+    } catch {
+      end--;
+    }
+  }
+  return "";
+}
+
+function formatAuditPreview(value: unknown, totalBudget: number): string {
+  if (totalBudget <= 0) return "";
+  const markerBytes = Buffer.from(AUDIT_TRUNCATION_MARKER, "utf8");
+  if (totalBudget <= markerBytes.byteLength) {
+    return markerBytes.subarray(0, totalBudget).toString("utf8");
+  }
+  return decodeUtf8Prefix(value, auditPreviewPrefixBytes(totalBudget)) + AUDIT_TRUNCATION_MARKER;
+}
 
 function json<T>(value: unknown): T {
   return JSON.parse(String(value)) as T;
@@ -1280,7 +1315,7 @@ export class AgentCorpDatabase {
     return Number(row.count);
   }
 
-  getAuditTasks(options?: AuditExportOptions): TaskRecord[] {
+  getAuditTasks(options?: AuditExportOptions): AuditTaskRecord[] {
     const limit = parseLimit(options?.limit, DEFAULT_AUDIT_LIMIT, MAX_AUDIT_LIMIT);
     const maxBytes = options?.maxPayloadBytes;
     const params: Array<string | number> = [];
@@ -1289,13 +1324,17 @@ export class AgentCorpDatabase {
       query = `SELECT 
         task_id, title,
         CASE 
-          WHEN description IS NOT NULL AND OCTET_LENGTH(description) > ? THEN CAST(SUBSTR(CAST(description AS BLOB), 1, ?) AS TEXT)
+          WHEN description IS NOT NULL AND OCTET_LENGTH(description) > ? THEN NULL
           ELSE description 
         END AS description,
+        CASE
+          WHEN description IS NOT NULL AND OCTET_LENGTH(description) > ? THEN SUBSTR(CAST(description AS BLOB), 1, ?)
+          ELSE NULL
+        END AS description_preview,
         CASE WHEN description IS NOT NULL THEN OCTET_LENGTH(description) ELSE NULL END AS description_full_length,
         created_by, assigned_to, status, created_at, updated_at
       FROM tasks`;
-      params.push(maxBytes, maxBytes);
+      params.push(maxBytes, maxBytes, auditPreviewPrefixBytes(maxBytes));
     } else {
       query = "SELECT *, CASE WHEN description IS NOT NULL THEN OCTET_LENGTH(description) ELSE NULL END AS description_full_length FROM tasks";
     }
@@ -1311,13 +1350,11 @@ export class AgentCorpDatabase {
       const fullLen = typeof r.description_full_length === "number" ? r.description_full_length : 0;
       const base = mapTask(r);
       if (maxBytes !== undefined && maxBytes > 0 && fullLen > maxBytes) {
-        const marker = "... [truncated]";
-        const markerBytes = Buffer.byteLength(marker, "utf8");
-        const keepBytes = Math.max(0, maxBytes - markerBytes);
-        const preview = typeof r.description === "string" ? r.description.slice(0, keepBytes) : "";
         return {
           ...base,
-          description: preview + marker,
+          description: formatAuditPreview(r.description_preview, maxBytes),
+          descriptionClipped: true,
+          descriptionByteLength: fullLen,
         };
       }
       return base;
@@ -1333,16 +1370,21 @@ export class AgentCorpDatabase {
     
     let query: string;
     if (maxBytes !== undefined && maxBytes > 0) {
+      const previewBudget = Math.min(MAX_AUDIT_PREVIEW_BYTES, maxBytes);
       query = `SELECT 
         message_id, task_id, from_role, to_role, type,
         CASE 
-          WHEN OCTET_LENGTH(payload) > ? THEN CAST(SUBSTR(CAST(payload AS BLOB), 1, ?) AS TEXT)
+          WHEN OCTET_LENGTH(payload) > ? THEN NULL
           ELSE payload 
         END AS payload,
+        CASE
+          WHEN OCTET_LENGTH(payload) > ? THEN SUBSTR(CAST(payload AS BLOB), 1, ?)
+          ELSE NULL
+        END AS payload_preview,
         OCTET_LENGTH(payload) AS payload_full_length,
         references_json, in_reply_to, status, risk_tags, created_at, resolved_at
       FROM messages`;
-      params.push(maxBytes, maxBytes);
+      params.push(maxBytes, maxBytes, auditPreviewPrefixBytes(previewBudget));
     } else {
       query = "SELECT *, OCTET_LENGTH(payload) AS payload_full_length FROM messages";
     }
@@ -1366,7 +1408,7 @@ export class AgentCorpDatabase {
           payload: {
             _truncated: true,
             byteLength: fullLen,
-            preview: (r.payload as string).slice(0, Math.min(256, maxBytes)) + "... [truncated]",
+            preview: formatAuditPreview(r.payload_preview, Math.min(MAX_AUDIT_PREVIEW_BYTES, maxBytes)),
           },
           references: JSON.parse((r.references_json as string | null) ?? "[]") as string[],
           inReplyTo: (r.in_reply_to as string | null) ?? null,
@@ -1389,16 +1431,21 @@ export class AgentCorpDatabase {
     
     let query: string;
     if (maxBytes !== undefined && maxBytes > 0) {
+      const previewBudget = Math.min(MAX_AUDIT_PREVIEW_BYTES, maxBytes);
       query = `SELECT 
         approval_id, subject, subject_id, requested_by, status,
         CASE 
-          WHEN context IS NOT NULL AND OCTET_LENGTH(context) > ? THEN CAST(SUBSTR(CAST(context AS BLOB), 1, ?) AS TEXT)
+          WHEN context IS NOT NULL AND OCTET_LENGTH(context) > ? THEN NULL
           ELSE context 
         END AS context,
+        CASE
+          WHEN context IS NOT NULL AND OCTET_LENGTH(context) > ? THEN SUBSTR(CAST(context AS BLOB), 1, ?)
+          ELSE NULL
+        END AS context_preview,
         CASE WHEN context IS NOT NULL THEN OCTET_LENGTH(context) ELSE NULL END AS context_full_length,
         created_at, decided_at, decision_note
       FROM approvals`;
-      params.push(maxBytes, maxBytes);
+      params.push(maxBytes, maxBytes, auditPreviewPrefixBytes(previewBudget));
     } else {
       query = `SELECT 
         approval_id, subject, subject_id, requested_by, status,
@@ -1427,7 +1474,7 @@ export class AgentCorpDatabase {
           context: {
             _truncated: true,
             byteLength: fullLen,
-            preview: (typeof r.context === "string" ? r.context.slice(0, Math.min(256, maxBytes)) : "") + "... [truncated]",
+            preview: formatAuditPreview(r.context_preview, Math.min(MAX_AUDIT_PREVIEW_BYTES, maxBytes)),
           },
           createdAt: String(r.created_at),
           decidedAt: r.decided_at ? String(r.decided_at) : null,
@@ -1440,23 +1487,28 @@ export class AgentCorpDatabase {
     return items;
   }
 
-  getAuditArtifacts(options?: AuditExportOptions): ArtifactRecord[] {
+  getAuditArtifacts(options?: AuditExportOptions): AuditArtifactRecord[] {
     const limit = parseLimit(options?.limit, DEFAULT_AUDIT_LIMIT, MAX_AUDIT_LIMIT);
     const maxBytes = options?.maxPayloadBytes;
     const params: Array<string | number> = [];
 
     let query: string;
     if (maxBytes !== undefined && maxBytes > 0) {
+      const previewBudget = Math.min(MAX_AUDIT_PREVIEW_BYTES, maxBytes);
       query = `SELECT
         artifact_id, type, name, produced_by, content_hash,
         CASE
-          WHEN content IS NOT NULL AND OCTET_LENGTH(content) > ? THEN CAST(SUBSTR(CAST(content AS BLOB), 1, ?) AS TEXT)
+          WHEN content IS NOT NULL AND OCTET_LENGTH(content) > ? THEN NULL
           ELSE content
         END AS content,
+        CASE
+          WHEN content IS NOT NULL AND OCTET_LENGTH(content) > ? THEN SUBSTR(CAST(content AS BLOB), 1, ?)
+          ELSE NULL
+        END AS content_preview,
         CASE WHEN content IS NOT NULL THEN OCTET_LENGTH(content) ELSE NULL END AS content_full_length,
         content_uri, visible_to_roles, related_task_id, created_at
       FROM artifacts`;
-      params.push(maxBytes, maxBytes);
+      params.push(maxBytes, maxBytes, auditPreviewPrefixBytes(previewBudget));
     } else {
       query = "SELECT *, CASE WHEN content IS NOT NULL THEN OCTET_LENGTH(content) ELSE NULL END AS content_full_length FROM artifacts";
     }
@@ -1474,7 +1526,9 @@ export class AgentCorpDatabase {
         const item = mapArtifact(r, false);
         return {
           ...item,
-          content: (r.content as string).slice(0, Math.min(256, maxBytes)) + "... [truncated]",
+          content: formatAuditPreview(r.content_preview, Math.min(MAX_AUDIT_PREVIEW_BYTES, maxBytes)),
+          contentClipped: true,
+          contentByteLength: fullLen,
         };
       }
       return mapArtifact(r, false);

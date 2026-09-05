@@ -71,7 +71,7 @@ Exit criteria met: Chaos E2E kills daemon mid-session and proves same client rec
 
 Goal: deliver a reproducible, high-standard open-source developer preview release candidate.
 
-- Cross-platform GitHub CI across Ubuntu, Windows, and macOS on Node 22
+- Cross-platform GitHub CI across Ubuntu, Windows, and macOS on supported Node 22 and 24 releases
 - Outside-checkout temporary-install package smoke test leaving zero workspace debris
 - Curated npm package manifest (< 200 KB packed) retaining declarations, source maps, console assets, and docs while excluding binary images and internal design specs
 - Open source community templates (Contributor Covenant Code of Conduct, GitHub Issue & PR templates)

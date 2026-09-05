@@ -44,9 +44,15 @@ Release publication and tagging are strictly manual, maintainer-owned actions. A
 1. Ensure the working tree is clean on `master`.
 2. Confirm `version` in `package.json` matches the intended release (e.g. `0.1.0-alpha.1`).
 3. Verify that `CHANGELOG.md` documents all features, breaking changes, fixes, and schema migrations under the release heading.
+4. Replace `Unreleased` in that heading with the actual publication date (`YYYY-MM-DD`) only when cutting the release.
 
 ### Step 2: Create Git Tag
-Create a signed or annotated Git tag:
+Create a signed tag when you have configured a signing identity:
+```sh
+git tag -s v0.1.0-alpha.1 -m "Release v0.1.0-alpha.1"
+```
+
+Otherwise, create an annotated tag and state clearly that it is not cryptographically signed:
 ```sh
 git tag -a v0.1.0-alpha.1 -m "Release v0.1.0-alpha.1"
 ```
@@ -63,7 +69,7 @@ git push origin master --tags
 4. Mark as **Pre-release** for alpha/beta versions.
 
 ### Step 5: Publish to npm Registry
-Publishing requires maintainer npm credentials with two-factor authentication (2FA) and provenance:
+Publishing requires maintainer npm credentials with two-factor authentication (2FA):
 
 ```sh
 # For alpha/preview releases:
@@ -72,6 +78,11 @@ npm publish --access public --tag alpha
 # For stable GA releases:
 npm publish --access public
 ```
+
+Only add `--provenance` when publishing from a supported CI environment with an
+OIDC trusted-publisher configuration. A local 2FA publication does not acquire
+provenance merely by adding the flag. Confirm the provenance badge and
+attestation on npm before claiming that a release has provenance.
 
 ### Step 6: Post-Release Registry Verification
 Verify the published package in a clean temporary directory:
