@@ -1282,8 +1282,23 @@ export class AgentCorpDatabase {
 
   getAuditTasks(options?: AuditExportOptions): TaskRecord[] {
     const limit = parseLimit(options?.limit, DEFAULT_AUDIT_LIMIT, MAX_AUDIT_LIMIT);
-    let query = "SELECT * FROM tasks";
+    const maxBytes = options?.maxPayloadBytes;
     const params: Array<string | number> = [];
+    let query: string;
+    if (maxBytes !== undefined && maxBytes > 0) {
+      query = `SELECT 
+        task_id, title,
+        CASE 
+          WHEN description IS NOT NULL AND OCTET_LENGTH(description) > ? THEN CAST(SUBSTR(CAST(description AS BLOB), 1, ?) AS TEXT)
+          ELSE description 
+        END AS description,
+        created_by, assigned_to, status, created_at, updated_at
+      FROM tasks`;
+      params.push(maxBytes, maxBytes);
+    } else {
+      query = "SELECT * FROM tasks";
+    }
+
     if (options?.since) {
       query += " WHERE (created_at >= ? OR updated_at >= ?)";
       params.push(options.since, options.since);
@@ -1366,11 +1381,16 @@ export class AgentCorpDatabase {
           ELSE context 
         END AS context,
         CASE WHEN context IS NOT NULL THEN OCTET_LENGTH(context) ELSE NULL END AS context_full_length,
-        created_at, decided_at, decision_note, edited_payload
+        created_at, decided_at, decision_note
       FROM approvals`;
       params.push(maxBytes, maxBytes);
     } else {
-      query = "SELECT *, CASE WHEN context IS NOT NULL THEN OCTET_LENGTH(context) ELSE NULL END AS context_full_length FROM approvals";
+      query = `SELECT 
+        approval_id, subject, subject_id, requested_by, status,
+        context,
+        CASE WHEN context IS NOT NULL THEN OCTET_LENGTH(context) ELSE NULL END AS context_full_length,
+        created_at, decided_at, decision_note
+      FROM approvals`;
     }
 
     if (options?.since) {

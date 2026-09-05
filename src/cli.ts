@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { stdin as input, stdout as outputStream } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
@@ -414,13 +414,17 @@ program
     const { broker } = openBroker(gOpts);
     const credPath = gOpts.credentials ?? resolveDefaultPath({ configPath: gOpts.config, dbPath: gOpts.db }, "credentials.json");
     const creds = ensureCredentials(broker.config, credPath);
+    const targetDaemonFile = options.daemonFile
+      ? resolve(options.daemonFile)
+      : resolveDefaultPath({ configPath: gOpts.config, dbPath: gOpts.db }, "daemon.json");
     const server = new AgentCorpServer(broker, creds, {
       port: parseInt(options.port, 10),
       host: options.host,
-      daemonFilePath: options.daemonFile ? resolve(options.daemonFile) : resolve(".agentcorp/daemon.json"),
+      daemonFilePath: targetDaemonFile,
     });
 
-    const daemonLogger = new RotatingLogger(".agentcorp/daemon.log");
+    const daemonLogDir = dirname(targetDaemonFile);
+    const daemonLogger = new RotatingLogger(resolve(daemonLogDir, "daemon.log"));
     daemonLogger.write(`AgentCorp daemon starting on ${options.host}:${options.port} (PID: ${process.pid}, config: ${gOpts.config}, db: ${gOpts.db})`);
     broker.on("event", (evt) => {
       const sanitized = sanitizeBrokerEventForLog(evt);

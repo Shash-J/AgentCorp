@@ -190,7 +190,18 @@ export async function ensureDaemonRunning(options: {
   noSpawn?: boolean | undefined;
   port?: number | string | undefined;
 }): Promise<DaemonInfo> {
-  const daemonFilePath = options.daemonFilePath ?? resolveDefaultPath(options, "daemon.json");
+  const resolvedDaemonFile = options.daemonFilePath
+    ? resolve(options.daemonFilePath)
+    : resolveDefaultPath(options, "daemon.json");
+  const resolvedDb = options.dbPath
+    ? resolve(options.dbPath)
+    : resolveDefaultPath(options, "agentcorp.db");
+  const resolvedCredentials = options.credentialsPath
+    ? resolve(options.credentialsPath)
+    : resolveDefaultPath(options, "credentials.json");
+  const resolvedConfig = options.configPath ? resolve(options.configPath) : undefined;
+
+  const daemonFilePath = resolvedDaemonFile;
   const existing = readDaemonInfo(daemonFilePath);
   if (existing && (await isDaemonHealthy(existing.url))) {
     return existing;
@@ -225,13 +236,25 @@ export async function ensureDaemonRunning(options: {
       }
 
       const cliPath = resolveCliPath();
-      const args = [cliPath, "start", "--port", options.port !== undefined ? String(options.port) : "0"];
-      if (options.configPath) args.push("--config", resolve(options.configPath));
-      if (options.dbPath) args.push("--db", resolve(options.dbPath));
-      if (options.daemonFilePath) args.push("--daemon-file", resolve(options.daemonFilePath));
-      if (options.credentialsPath) args.push("--credentials", resolve(options.credentialsPath));
+      const args = [
+        cliPath,
+        "start",
+        "--port",
+        options.port !== undefined ? String(options.port) : "0",
+        "--daemon-file",
+        resolvedDaemonFile,
+        "--db",
+        resolvedDb,
+        "--credentials",
+        resolvedCredentials,
+      ];
+      if (resolvedConfig) {
+        args.push("--config", resolvedConfig);
+      }
 
+      const spawnCwd = resolvedConfig ? dirname(resolvedConfig) : process.cwd();
       const child = spawn(process.execPath, args, {
+        cwd: spawnCwd,
         detached: true,
         stdio: "ignore",
         env: process.env,
