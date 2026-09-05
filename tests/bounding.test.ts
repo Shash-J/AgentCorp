@@ -1,7 +1,9 @@
 import { mkdirSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { generateAuditSnapshot } from "../src/audit.js";
 import { AgentCorpBroker } from "../src/broker.js";
+import { parseOrgConfig } from "../src/config.js";
 import { AgentCorpDatabase } from "../src/database.js";
 import { AgentCorpError } from "../src/errors.js";
 import { AgentCorpServer } from "../src/server.js";
@@ -491,9 +493,9 @@ describe("bounding, pagination, and maintenance", () => {
       mkdirSync(testDir, { recursive: true });
       const dbPath = resolve(testDir, "restart_test.db");
 
-      // Phase 1: Open, write data, verify schema version 3
+      // Phase 1: Open, write data, verify schema version 4
       const db1 = new AgentCorpDatabase(dbPath);
-      expect(db1.getSchemaVersion()).toBe(3);
+      expect(db1.getSchemaVersion()).toBe(4);
       db1.insertTask({
         taskId: "task_persisted",
         title: "Persisted Task",
@@ -509,13 +511,423 @@ describe("bounding, pagination, and maintenance", () => {
       // Phase 2: Reopen from disk, verify schema version and data persistence
       const db2 = new AgentCorpDatabase(dbPath);
       try {
-        expect(db2.getSchemaVersion()).toBe(3);
+        expect(db2.getSchemaVersion()).toBe(4);
         const task = db2.getTask("task_persisted");
         expect(task).toBeDefined();
         expect(task?.title).toBe("Persisted Task");
       } finally {
         db2.close();
         rmSync(testDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("blocker regressions (AC-BND-01 through AC-BND-07)", () => {
+    it("AC-BND-01: prunes task with attached artifact cleanly, detaching by default or deleting when requested", () => {
+      const db = new AgentCorpDatabase(":memory:");
+      const broker = new AgentCorpBroker(TEST_CONFIG, db);
+
+      try {
+        const oldTimestamp = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+
+        // 1. Setup task and attached artifact
+        db.insertTask({
+          taskId: "task_fk_test_1",
+          title: "FK Test Task 1",
+          description: null,
+          createdBy: "architect",
+          assignedTo: "developer",
+          status: "completed",
+          createdAt: oldTimestamp,
+          updatedAt: oldTimestamp,
+        });
+
+        db.insertArtifact({
+          artifactId: "art_fk_test_1",
+          relatedTaskId: "task_fk_test_1",
+          producedBy: "architect",
+          type: "spec",
+          name: "spec1.md",
+          content: "test content 1",
+          contentHash: "hash1",
+          contentUri: null,
+          visibleToRoles: ["architect", "developer"],
+          createdAt: oldTimestamp,
+        });
+
+        // Default prune: detaches artifact (sets related_task_id to null) without FK violation
+        const resultDetach = broker.prune({ olderThanDays: 30, dryRun: false });
+        expect(resultDetach.tasksCount).toBe(1);
+        expect(resultDetach.artifactsDetachedCount).toBe(1);
+        expect(resultDetach.artifactsDeletedCount).toBe(0);
+
+        expect(db.getTask("task_fk_test_1")).toBeUndefined();
+        const artifact1 = db.getArtifact("art_fk_test_1");
+        expect(artifact1).toBeDefined();
+        expect(artifact1?.relatedTaskId).toBeNull();
+
+        // 2. Setup second task and attached artifact with deleteArtifacts: true
+        db.insertTask({
+          taskId: "task_fk_test_2",
+          title: "FK Test Task 2",
+          description: null,
+          createdBy: "architect",
+          assignedTo: "developer",
+          status: "completed",
+          createdAt: oldTimestamp,
+          updatedAt: oldTimestamp,
+        });
+
+        db.insertArtifact({
+          artifactId: "art_fk_test_2",
+          relatedTaskId: "task_fk_test_2",
+          producedBy: "architect",
+          type: "spec",
+          name: "spec2.md",
+          content: "test content 2",
+          contentHash: "hash2",
+          contentUri: null,
+          visibleToRoles: ["architect", "developer"],
+          createdAt: oldTimestamp,
+        });
+
+        const resultDelete = broker.prune({ olderThanDays: 30, dryRun: false, deleteArtifacts: true });
+        expect(resultDelete.tasksCount).toBe(1);
+        expect(resultDelete.artifactsDeletedCount).toBe(1);
+        expect(resultDelete.artifactsDetachedCount).toBe(0);
+
+        expect(db.getTask("task_fk_test_2")).toBeUndefined();
+        expect(db.getArtifact("art_fk_test_2")).toBeUndefined();
+      } finally {
+        db.close();
+      }
+    });
+
+    it("AC-BND-02: executes prune using set-based subqueries without variable bounds or materialization", () => {
+      const db = new AgentCorpDatabase(":memory:");
+      const broker = new AgentCorpBroker(TEST_CONFIG, db);
+
+      try {
+        const oldTimestamp = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+
+        // Insert 100 old completed tasks and 200 associated messages
+        for (let i = 0; i < 100; i++) {
+          db.insertTask({
+            taskId: `scale_task_${i}`,
+            title: `Scale Task ${i}`,
+            description: null,
+            createdBy: "architect",
+            assignedTo: "developer",
+            status: "completed",
+            createdAt: oldTimestamp,
+            updatedAt: oldTimestamp,
+          });
+
+          db.insertMessage({
+            messageId: `scale_msg_${i}_1`,
+            taskId: `scale_task_${i}`,
+            fromRole: "architect",
+            toRole: "developer",
+            type: "status_update",
+            payload: { i },
+            references: [],
+            inReplyTo: null,
+            status: "delivered",
+            riskTags: [],
+            createdAt: oldTimestamp,
+            resolvedAt: oldTimestamp,
+          });
+          db.insertMessage({
+            messageId: `scale_msg_${i}_2`,
+            taskId: `scale_task_${i}`,
+            fromRole: "developer",
+            toRole: "architect",
+            type: "status_update",
+            payload: { i },
+            references: [],
+            inReplyTo: null,
+            status: "delivered",
+            riskTags: [],
+            createdAt: oldTimestamp,
+            resolvedAt: oldTimestamp,
+          });
+        }
+
+        expect(db.countTasks()).toBe(100);
+        expect(db.countMessages()).toBe(200);
+
+        // Live prune executes via subquery without variable expansion
+        const pruneResult = broker.prune({ olderThanDays: 30, dryRun: false });
+        expect(pruneResult.tasksCount).toBe(100);
+        expect(pruneResult.messagesCount).toBe(200);
+        expect(db.countTasks()).toBe(0);
+        expect(db.countMessages()).toBe(0);
+      } finally {
+        db.close();
+      }
+    });
+
+    it("AC-BND-03: generates audit snapshots over entire history past default 50-row limit with watermark metadata", () => {
+      const db = new AgentCorpDatabase(":memory:");
+
+      try {
+        // Insert 60 tasks and 60 messages
+        for (let i = 0; i < 60; i++) {
+          const iso = new Date(1700000000000 + i * 1000).toISOString();
+          db.insertTask({
+            taskId: `audit_task_${i}`,
+            title: `Audit Task ${i}`,
+            description: null,
+            createdBy: "architect",
+            assignedTo: "developer",
+            status: "assigned",
+            createdAt: iso,
+            updatedAt: iso,
+          });
+          db.insertMessage({
+            messageId: `audit_msg_${i}`,
+            taskId: `audit_task_${i}`,
+            fromRole: "architect",
+            toRole: "developer",
+            type: "status_update",
+            payload: { i },
+            references: [],
+            inReplyTo: null,
+            status: "delivered",
+            riskTags: [],
+            createdAt: iso,
+            resolvedAt: iso,
+          });
+        }
+
+        const broker = new AgentCorpBroker(TEST_CONFIG, db);
+
+        // Full audit snapshot
+        const fullSnapshot = generateAuditSnapshot(broker);
+        expect(fullSnapshot.tasks.length).toBe(60);
+        expect(fullSnapshot.messages.length).toBe(60);
+        expect(fullSnapshot.metadata.totalTasksAvailable).toBe(60);
+        expect(fullSnapshot.metadata.totalMessagesAvailable).toBe(60);
+        expect(fullSnapshot.metadata.truncated).toBe(false);
+
+        // Bounded audit snapshot with limit: 25
+        const boundedSnapshot = generateAuditSnapshot(broker, { limit: 25 });
+        expect(boundedSnapshot.tasks.length).toBe(25);
+        expect(boundedSnapshot.messages.length).toBe(25);
+        expect(boundedSnapshot.metadata.totalTasksAvailable).toBe(60);
+        expect(boundedSnapshot.metadata.totalMessagesAvailable).toBe(60);
+        expect(boundedSnapshot.metadata.truncated).toBe(true);
+      } finally {
+        db.close();
+      }
+    });
+
+    it("AC-BND-04: scans database until page is filled when artifacts are filtered by ACL", () => {
+      const db = new AgentCorpDatabase(":memory:");
+      const broker = new AgentCorpBroker(TEST_CONFIG, db);
+
+      try {
+        // Artifacts 1-5: visibility ["auditor"] (hidden from developer)
+        // Artifacts 6-9: visibility ["developer"] (visible to developer)
+        for (let i = 1; i <= 5; i++) {
+          db.insertArtifact({
+            artifactId: `hidden_art_${i}`,
+            relatedTaskId: null,
+            producedBy: "architect",
+            type: "spec",
+            name: `hidden_${i}.md`,
+            content: "hidden",
+            contentHash: `hash_h_${i}`,
+            contentUri: null,
+            visibleToRoles: ["auditor"],
+            createdAt: `2026-09-01T00:00:0${i}Z`,
+          });
+        }
+
+        for (let i = 6; i <= 9; i++) {
+          db.insertArtifact({
+            artifactId: `visible_art_${i}`,
+            relatedTaskId: null,
+            producedBy: "developer",
+            type: "code",
+            name: `visible_${i}.ts`,
+            content: "visible",
+            contentHash: `hash_v_${i}`,
+            contentUri: null,
+            visibleToRoles: ["developer"],
+            createdAt: `2026-09-01T00:00:0${i}Z`,
+          });
+        }
+
+        // Developer asks for limit: 2.
+        // Should skip hidden artifacts and return first 2 visible items in one page, not an empty page!
+        const page1 = broker.listArtifactsPaginated("developer", { limit: 2 });
+        expect(page1.items).toHaveLength(2);
+        expect(page1.items.map((a) => a.artifactId)).toEqual(["visible_art_6", "visible_art_7"]);
+        expect(page1.nextCursor).not.toBeNull();
+
+        // Page 2
+        const page2 = broker.listArtifactsPaginated("developer", { limit: 2, cursor: page1.nextCursor! });
+        expect(page2.items).toHaveLength(2);
+        expect(page2.items.map((a) => a.artifactId)).toEqual(["visible_art_8", "visible_art_9"]);
+      } finally {
+        db.close();
+      }
+    });
+
+    it("AC-BND-05: handles real multi-connection disk-backed WAL contention and busy timeout", async () => {
+      const testDir = resolve(".agentcorp/test_wal_contention");
+      mkdirSync(testDir, { recursive: true });
+      const dbPath = resolve(testDir, "wal_contention.db");
+
+      const conn1 = new AgentCorpDatabase(dbPath);
+      const conn2 = new AgentCorpDatabase(dbPath);
+
+      try {
+        // Concurrent writes from both connections
+        const p1 = Promise.resolve().then(() => {
+          for (let i = 0; i < 10; i++) {
+            conn1.insertTask({
+              taskId: `conn1_task_${i}`,
+              title: `Conn1 Task ${i}`,
+              description: null,
+              createdBy: "architect",
+              assignedTo: "developer",
+              status: "assigned",
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        });
+
+        const p2 = Promise.resolve().then(() => {
+          for (let i = 0; i < 10; i++) {
+            conn2.insertTask({
+              taskId: `conn2_task_${i}`,
+              title: `Conn2 Task ${i}`,
+              description: null,
+              createdBy: "architect",
+              assignedTo: "developer",
+              status: "assigned",
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        });
+
+        await Promise.all([p1, p2]);
+
+        expect(conn1.countTasks()).toBe(20);
+        expect(conn2.countTasks()).toBe(20);
+      } finally {
+        conn1.close();
+        conn2.close();
+        rmSync(testDir, { recursive: true, force: true });
+      }
+    });
+
+    it("AC-BND-06: logs maintenance actions and returns checkpoint busy state", () => {
+      const db = new AgentCorpDatabase(":memory:");
+      const broker = new AgentCorpBroker(TEST_CONFIG, db);
+
+      try {
+        // Prune dry-run
+        broker.prune({ olderThanDays: 30, dryRun: true });
+        // Prune live
+        broker.prune({ olderThanDays: 30, dryRun: false });
+        // Compact
+        const compactResult = broker.checkpointAndCompact();
+
+        expect(compactResult.checkpoint).toBe("TRUNCATE");
+        expect(typeof compactResult.busy).toBe("boolean");
+        expect(typeof compactResult.logPages).toBe("number");
+        expect(typeof compactResult.checkpointedPages).toBe("number");
+        expect(compactResult.vacuumed).toBe(true);
+
+        const logs = db.listMaintenanceLogs();
+        expect(logs.length).toBeGreaterThanOrEqual(3);
+        const actions = logs.map((l) => l.action);
+        expect(actions).toContain("prune_simulation");
+        expect(actions).toContain("prune_execution");
+        expect(actions).toContain("compact");
+
+        const compactLog = logs.find((l) => l.action === "compact");
+        expect(compactLog?.details).toHaveProperty("busy");
+        expect(compactLog?.details).toHaveProperty("vacuumed", true);
+      } finally {
+        db.close();
+      }
+    });
+
+    it("AC-BND-07: enforces limits from org.toml [limits] and exposes X-Total-Count", async () => {
+      const tomlContent = `
+[company]
+name = "Limits Corp"
+
+[limits]
+max_payload_size_bytes = 500
+max_artifact_size_bytes = 1000
+max_request_body_bytes = 2000
+default_page_size = 5
+max_page_size = 20
+
+[[roles]]
+id = "architect"
+interface = "mcp"
+capabilities = ["propose_plan"]
+allowed_peers = ["developer"]
+artifact_visibility = "all"
+
+[[roles]]
+id = "developer"
+interface = "mcp"
+capabilities = ["write_code"]
+allowed_peers = ["architect"]
+artifact_visibility = "all"
+`;
+      const parsedConfig = parseOrgConfig(tomlContent);
+      expect(parsedConfig.limits?.max_payload_size_bytes).toBe(500);
+      expect(parsedConfig.limits?.max_artifact_size_bytes).toBe(1000);
+
+      const db = new AgentCorpDatabase(":memory:");
+      const broker = new AgentCorpBroker(parsedConfig, db);
+      const server = new AgentCorpServer(broker, undefined, { port: 0 });
+      const info = await server.start();
+
+      try {
+        // Broker enforces config limits without constructor overrides
+        expect(() => {
+          broker.sendMessage("architect", {
+            toRole: "developer",
+            type: "status_update",
+            payload: { text: "x".repeat(600) },
+          });
+        }).toThrowError(AgentCorpError);
+
+        // Seed 3 tasks
+        for (let i = 1; i <= 3; i++) {
+          db.insertTask({
+            taskId: `count_task_${i}`,
+            title: `Count Task ${i}`,
+            description: null,
+            createdBy: "architect",
+            assignedTo: "developer",
+            status: "assigned",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+        }
+
+        // Server returns X-Total-Count header
+        const res = await fetch(`${info.url}/api/tasks?limit=2`, {
+          headers: { Authorization: `Bearer ${server.credentials.adminToken}` },
+        });
+        expect(res.status).toBe(200);
+        expect(res.headers.get("X-Total-Count")).toBe("3");
+        expect(res.headers.get("X-Next-Cursor")).toBeTruthy();
+      } finally {
+        await server.stop();
+        db.close();
       }
     });
   });

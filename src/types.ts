@@ -70,10 +70,22 @@ export const InitialPolicySchema = z.object({
 });
 export type InitialPolicy = z.infer<typeof InitialPolicySchema>;
 
+export const LimitsConfigSchema = z.object({
+  max_request_body_bytes: z.number().int().positive().optional(),
+  max_message_payload_bytes: z.number().int().positive().optional(),
+  max_artifact_bytes: z.number().int().positive().optional(),
+  max_payload_size_bytes: z.number().int().positive().optional(),
+  max_artifact_size_bytes: z.number().int().positive().optional(),
+  default_page_size: z.number().int().positive().optional(),
+  max_page_size: z.number().int().positive().optional(),
+});
+export type LimitsConfig = z.infer<typeof LimitsConfigSchema>;
+
 export const OrgConfigSchema = z.object({
   company: z.object({ name: z.string().min(1) }),
   roles: z.array(RoleSchema).min(1),
   policies: z.array(InitialPolicySchema).default([]),
+  limits: LimitsConfigSchema.optional(),
 });
 export type OrgConfig = z.infer<typeof OrgConfigSchema>;
 
@@ -188,6 +200,7 @@ export interface BrokerLimits {
 export interface PruneOptions {
   olderThanDays: number;
   dryRun?: boolean | undefined;
+  deleteArtifacts?: boolean | undefined;
 }
 
 export interface PruneResult {
@@ -198,4 +211,29 @@ export interface PruneResult {
   messageEventsCount: number;
   taskTransitionsCount: number;
   approvalsCount: number;
+  artifactsDetachedCount: number;
+  artifactsDeletedCount: number;
+}
+
+export interface MaintenanceLogRecord {
+  id: string;
+  action: "prune" | "prune_simulation" | "prune_execution" | "compact";
+  details: unknown;
+  createdAt: string;
+}
+
+export interface AuditExportOptions {
+  limit?: number | undefined;
+  since?: string | undefined;
+}
+
+export interface AuditSnapshotMetadata {
+  generatedAt: string;
+  since?: string | undefined;
+  limit?: number | undefined;
+  totalTasksAvailable: number;
+  totalMessagesAvailable: number;
+  totalApprovalsAvailable: number;
+  totalArtifactsAvailable: number;
+  truncated: boolean;
 }

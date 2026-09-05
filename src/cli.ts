@@ -19,6 +19,11 @@ import type { InitialPolicy, PendingApproval, PolicyRule } from "./types.js";
 const SAMPLE_ORG = `[company]
 name = "My Agent Company"
 
+[limits]
+max_request_body_bytes = 2097152
+max_message_payload_bytes = 1048576
+max_artifact_bytes = 5242880
+
 [[roles]]
 id = "architect"
 display_name = "Architect"
@@ -205,12 +210,12 @@ async function getAdminClient(options: GlobalOptions) {
               headers,
             })
           ).json(),
-        prune: async (olderThanDays: number, dryRun?: boolean) =>
+        prune: async (olderThanDays: number, dryRun?: boolean, deleteArtifacts?: boolean) =>
           await (
             await fetch(`${live.info.url}/api/maintenance/prune`, {
               method: "POST",
               headers,
-              body: JSON.stringify({ olderThanDays, dryRun }),
+              body: JSON.stringify({ olderThanDays, dryRun, deleteArtifacts }),
             })
           ).json(),
         compact: async () =>
@@ -234,8 +239,8 @@ async function getAdminClient(options: GlobalOptions) {
     listPolicies: async () => broker.listPolicies(),
     savePolicy: async (rule: unknown) => broker.savePolicy(rule as never),
     setPolicyEnabled: async (id: string, enabled: boolean) => broker.setPolicyEnabled(id, enabled),
-    prune: async (olderThanDays: number, dryRun?: boolean) =>
-      broker.prune({ olderThanDays, dryRun }),
+    prune: async (olderThanDays: number, dryRun?: boolean, deleteArtifacts?: boolean) =>
+      broker.prune({ olderThanDays, dryRun, deleteArtifacts }),
     compact: async () =>
       broker.checkpointAndCompact(),
     close: () => db.close(),
@@ -352,6 +357,7 @@ program
       const child = spawn(process.execPath, args, {
         detached: true,
         stdio: "ignore",
+        windowsHide: true,
         env: process.env,
       });
       child.unref();
@@ -646,21 +652,24 @@ audit
 
 program
   .command("prune")
-  .description("Prune resolved history older than specified days")
+  .description("Prune resolved history older than specified days (defaults to dry-run)")
   .option("--older-than <days>", "age in days of resolved tasks/messages to prune", "30")
-  .option("--dry-run", "simulate prune without deleting records")
+  .option("--execute", "perform live deletion (defaults to safe simulation without deleting)")
+  .option("--delete-artifacts", "delete associated artifacts instead of detaching them")
   .option("--compact", "run WAL checkpoint and VACUUM after pruning")
-  .action(async (options: { olderThan: string; dryRun?: boolean; compact?: boolean }) => {
+  .action(async (options: { olderThan: string; execute?: boolean; deleteArtifacts?: boolean; compact?: boolean }) => {
     const admin = await getAdminClient(program.opts<GlobalOptions>());
     try {
       const olderThanDays = parseInt(options.olderThan, 10);
-      const pruneResult = await admin.prune(olderThanDays, options.dryRun);
+      const dryRun = !options.execute;
+      const pruneResult = await admin.prune(olderThanDays, dryRun, options.deleteArtifacts);
       let compactResult: unknown = undefined;
-      if (options.compact && !options.dryRun) {
+      if (options.compact && !dryRun) {
         compactResult = await admin.compact();
       }
       output({
         ...pruneResult,
+        ...(dryRun ? { notice: "Dry run completed safely without deleting data. Pass --execute to delete records." } : {}),
         ...(compactResult ? { compact: compactResult } : {}),
       });
     } finally {

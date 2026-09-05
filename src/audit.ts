@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 import type { AgentCorpBroker } from "./broker.js";
 import type {
   ArtifactRecord,
+  AuditExportOptions,
+  AuditSnapshotMetadata,
   MessageRecord,
   PendingApproval,
   TaskRecord,
@@ -11,6 +13,7 @@ import type {
 export interface AuditSnapshot {
   exportedAt: string;
   company: string;
+  metadata: AuditSnapshotMetadata;
   roles: Array<{
     id: string;
     model?: string | undefined;
@@ -22,11 +25,6 @@ export interface AuditSnapshot {
   messages: MessageRecord[];
   approvals: PendingApproval[];
   artifacts: ArtifactRecord[];
-}
-
-export interface AuditExportOptions {
-  limit?: number | undefined;
-  since?: string | undefined;
 }
 
 export function generateAuditSnapshot(
@@ -46,29 +44,38 @@ export function generateAuditSnapshot(
     boundAgent: boundRoles.get(role.id),
   }));
 
-  let tasks = db.listAllTasks();
-  let messages = db.listAllMessages();
-  let approvals = db.listAllApprovals();
-  let artifacts = db.listArtifacts(null);
+  const totalTasksAvailable = db.countTasks();
+  const totalMessagesAvailable = db.countMessages();
+  const totalApprovalsAvailable = db.countApprovals();
+  const totalArtifactsAvailable = db.countArtifacts();
 
-  if (options.since) {
-    const sinceDate = options.since;
-    tasks = tasks.filter((t) => t.createdAt >= sinceDate || t.updatedAt >= sinceDate);
-    messages = messages.filter((m) => m.createdAt >= sinceDate);
-    approvals = approvals.filter((a) => a.createdAt >= sinceDate);
-    artifacts = artifacts.filter((a) => a.createdAt >= sinceDate);
-  }
+  const tasks = db.getAuditTasks(options);
+  const messages = db.getAuditMessages(options);
+  const approvals = db.getAuditApprovals(options);
+  const artifacts = db.getAuditArtifacts(options);
 
-  if (options.limit !== undefined && options.limit > 0) {
-    tasks = tasks.slice(-options.limit);
-    messages = messages.slice(-options.limit);
-    approvals = approvals.slice(-options.limit);
-    artifacts = artifacts.slice(-options.limit);
-  }
+  const truncated = Boolean(options.limit !== undefined && options.limit > 0 && (
+    tasks.length < totalTasksAvailable ||
+    messages.length < totalMessagesAvailable ||
+    approvals.length < totalApprovalsAvailable ||
+    artifacts.length < totalArtifactsAvailable
+  ));
+
+  const metadata: AuditSnapshotMetadata = {
+    generatedAt: new Date().toISOString(),
+    ...(options.since ? { since: options.since } : {}),
+    ...(options.limit !== undefined ? { limit: options.limit } : {}),
+    totalTasksAvailable,
+    totalMessagesAvailable,
+    totalApprovalsAvailable,
+    totalArtifactsAvailable,
+    truncated,
+  };
 
   return {
-    exportedAt: new Date().toISOString(),
+    exportedAt: metadata.generatedAt,
     company: broker.config.company.name,
+    metadata,
     roles,
     tasks,
     messages,
@@ -81,7 +88,14 @@ export function formatAuditMarkdown(snapshot: AuditSnapshot): string {
   const lines: string[] = [];
 
   lines.push(`# AgentCorp Audit Log — ${snapshot.company}`);
-  lines.push(`\n**Exported At:** \`${snapshot.exportedAt}\`\n`);
+  lines.push(`\n**Exported At:** \`${snapshot.exportedAt}\``);
+  if (snapshot.metadata?.since) {
+    lines.push(`**Since:** \`${snapshot.metadata.since}\``);
+  }
+  if (snapshot.metadata?.limit !== undefined) {
+    lines.push(`**Record Limit:** \`${snapshot.metadata.limit}\``);
+  }
+  lines.push(`**Truncated:** \`${snapshot.metadata?.truncated ? "Yes" : "No"}\`\n`);
 
   lines.push("## Active Roles & Bindings\n");
   lines.push("| Role ID | Bound Agent | Allowed Peers | Capabilities |");

@@ -1,10 +1,13 @@
+import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { getCurrentSchemaVersion, runMigrations } from "./migrations.js";
 import type {
   ArtifactRecord,
+  AuditExportOptions,
   InitialPolicy,
+  MaintenanceLogRecord,
   MessageRecord,
   PaginatedResult,
   PaginationOptions,
@@ -37,7 +40,7 @@ export function decodeCursor(cursor?: string): { timestamp?: string | undefined;
   return { id: cursor };
 }
 
-function parseLimit(limit?: number): number {
+export function parseLimit(limit?: number): number {
   if (limit === undefined || limit === null || Number.isNaN(limit)) return DEFAULT_PAGE_LIMIT;
   return Math.min(Math.max(1, Math.floor(limit)), MAX_PAGE_LIMIT);
 }
@@ -56,10 +59,10 @@ function mapMessage(row: Row): MessageRecord {
     toRole: String(row.to_role),
     type: String(row.type) as MessageRecord["type"],
     payload: json(row.payload),
-    references: json<string[]>(row.references),
+    references: json<string[]>(row.references ?? row.references_json ?? "[]"),
     inReplyTo: row.in_reply_to === null ? null : String(row.in_reply_to),
     status: String(row.status) as MessageRecord["status"],
-    riskTags: json<string[]>(row.risk_tags),
+    riskTags: json<string[]>(row.risk_tags ?? "[]"),
     createdAt: String(row.created_at),
     resolvedAt: row.resolved_at === null ? null : String(row.resolved_at),
   };
@@ -802,96 +805,302 @@ export class AgentCorpDatabase {
     const olderThanDays = Math.max(0, options.olderThanDays);
     const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
     const dryRun = options.dryRun ?? false;
+    const deleteArtifacts = options.deleteArtifacts ?? false;
 
-    // Terminal tasks older than cutoff
-    const eligibleTasks = this.db.prepare(`
-      SELECT task_id FROM tasks
+    // Count eligible tasks
+    const eligibleTasksRow = this.db.prepare(`
+      SELECT COUNT(*) as count FROM tasks
       WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ?
-    `).all(cutoff) as Array<{ task_id: string }>;
-    const taskIds = eligibleTasks.map((r) => String(r.task_id));
+    `).get(cutoff) as { count: number };
+    const tasksCount = Number(eligibleTasksRow.count);
 
-    // Messages belonging to those tasks OR resolved standalone messages older than cutoff
-    let messageIds: string[] = [];
-    if (taskIds.length > 0) {
-      const placeholders = taskIds.map(() => "?").join(",");
-      const msgs = this.db.prepare(`
+    // Count artifacts associated with eligible tasks
+    const eligibleArtifactsRow = this.db.prepare(`
+      SELECT COUNT(*) as count FROM artifacts
+      WHERE related_task_id IN (
+        SELECT task_id FROM tasks
+        WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ?
+      )
+    `).get(cutoff) as { count: number };
+    const artifactsCount = Number(eligibleArtifactsRow.count);
+    const artifactsDeletedCount = deleteArtifacts ? artifactsCount : 0;
+    const artifactsDetachedCount = deleteArtifacts ? 0 : artifactsCount;
+
+    // Count messages belonging to eligible tasks OR resolved standalone messages older than cutoff
+    const eligibleMessagesRow = this.db.prepare(`
+      SELECT COUNT(*) as count FROM messages
+      WHERE task_id IN (
+        SELECT task_id FROM tasks
+        WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ?
+      ) OR (task_id IS NULL AND resolved_at IS NOT NULL AND resolved_at < ?)
+    `).get(cutoff, cutoff) as { count: number };
+    const messagesCount = Number(eligibleMessagesRow.count);
+
+    // Count message events
+    const eligibleEventsRow = this.db.prepare(`
+      SELECT COUNT(*) as count FROM message_events
+      WHERE message_id IN (
         SELECT message_id FROM messages
-        WHERE task_id IN (${placeholders})
-           OR (task_id IS NULL AND resolved_at IS NOT NULL AND resolved_at < ?)
-      `).all(...taskIds, cutoff) as Array<{ message_id: string }>;
-      messageIds = msgs.map((r) => String(r.message_id));
-    } else {
-      const msgs = this.db.prepare(`
-        SELECT message_id FROM messages
-        WHERE task_id IS NULL AND resolved_at IS NOT NULL AND resolved_at < ?
-      `).all(cutoff) as Array<{ message_id: string }>;
-      messageIds = msgs.map((r) => String(r.message_id));
-    }
+        WHERE task_id IN (
+          SELECT task_id FROM tasks
+          WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ?
+        ) OR (task_id IS NULL AND resolved_at IS NOT NULL AND resolved_at < ?)
+      )
+    `).get(cutoff, cutoff) as { count: number };
+    const messageEventsCount = Number(eligibleEventsRow.count);
 
-    // Message events for those messages
-    let eventCount = 0;
-    if (messageIds.length > 0) {
-      const placeholders = messageIds.map(() => "?").join(",");
-      const res = this.db.prepare(`
-        SELECT COUNT(*) as count FROM message_events WHERE message_id IN (${placeholders})
-      `).get(...messageIds) as { count: number };
-      eventCount = Number(res.count);
-    }
+    // Count task transitions
+    const eligibleTransitionsRow = this.db.prepare(`
+      SELECT COUNT(*) as count FROM task_transitions
+      WHERE task_id IN (
+        SELECT task_id FROM tasks
+        WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ?
+      )
+    `).get(cutoff) as { count: number };
+    const taskTransitionsCount = Number(eligibleTransitionsRow.count);
 
-    // Task transitions for eligible tasks
-    let transitionCount = 0;
-    if (taskIds.length > 0) {
-      const placeholders = taskIds.map(() => "?").join(",");
-      const res = this.db.prepare(`
-        SELECT COUNT(*) as count FROM task_transitions WHERE task_id IN (${placeholders})
-      `).get(...taskIds) as { count: number };
-      transitionCount = Number(res.count);
-    }
-
-    // Resolved approvals older than cutoff
-    const eligibleApprovals = this.db.prepare(`
-      SELECT approval_id FROM approvals
-      WHERE status IN ('approved', 'rejected') AND decided_at IS NOT NULL AND decided_at < ?
-    `).all(cutoff) as Array<{ approval_id: string }>;
-    const approvalCount = eligibleApprovals.length;
+    // Count approvals
+    const eligibleApprovalsRow = this.db.prepare(`
+      SELECT COUNT(*) as count FROM approvals
+      WHERE (status IN ('approved', 'rejected') AND decided_at IS NOT NULL AND decided_at < ?)
+         OR (subject = 'task' AND subject_id IN (
+              SELECT task_id FROM tasks
+              WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ?
+            ))
+    `).get(cutoff, cutoff) as { count: number };
+    const approvalsCount = Number(eligibleApprovalsRow.count);
 
     const result: PruneResult = {
       dryRun,
       cutoffDate: cutoff,
-      tasksCount: taskIds.length,
-      messagesCount: messageIds.length,
-      messageEventsCount: eventCount,
-      taskTransitionsCount: transitionCount,
-      approvalsCount: approvalCount,
+      tasksCount,
+      messagesCount,
+      messageEventsCount,
+      taskTransitionsCount,
+      approvalsCount,
+      artifactsDetachedCount,
+      artifactsDeletedCount,
     };
 
     if (!dryRun) {
       this.transaction(() => {
-        if (messageIds.length > 0) {
-          const placeholders = messageIds.map(() => "?").join(",");
-          this.db.prepare(`DELETE FROM message_events WHERE message_id IN (${placeholders})`).run(...messageIds);
-          this.db.prepare(`DELETE FROM messages WHERE message_id IN (${placeholders})`).run(...messageIds);
+        // 1. Handle artifacts: either delete or detach to avoid foreign key failure
+        if (deleteArtifacts) {
+          this.db.prepare(`
+            DELETE FROM artifacts
+            WHERE related_task_id IN (
+              SELECT task_id FROM tasks
+              WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ?
+            )
+          `).run(cutoff);
+        } else {
+          this.db.prepare(`
+            UPDATE artifacts
+            SET related_task_id = NULL
+            WHERE related_task_id IN (
+              SELECT task_id FROM tasks
+              WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ?
+            )
+          `).run(cutoff);
         }
-        if (taskIds.length > 0) {
-          const placeholders = taskIds.map(() => "?").join(",");
-          this.db.prepare(`DELETE FROM task_transitions WHERE task_id IN (${placeholders})`).run(...taskIds);
-          this.db.prepare(`DELETE FROM tasks WHERE task_id IN (${placeholders})`).run(...taskIds);
-        }
-        if (eligibleApprovals.length > 0) {
-          const placeholders = eligibleApprovals.map(() => "?").join(",");
-          const approvalIds = eligibleApprovals.map((r) => String(r.approval_id));
-          this.db.prepare(`DELETE FROM approvals WHERE approval_id IN (${placeholders})`).run(...approvalIds);
-        }
+
+        // 2. Delete message events
+        this.db.prepare(`
+          DELETE FROM message_events
+          WHERE message_id IN (
+            SELECT message_id FROM messages
+            WHERE task_id IN (
+              SELECT task_id FROM tasks
+              WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ?
+            ) OR (task_id IS NULL AND resolved_at IS NOT NULL AND resolved_at < ?)
+          )
+        `).run(cutoff, cutoff);
+
+        // 3. Delete messages
+        this.db.prepare(`
+          DELETE FROM messages
+          WHERE task_id IN (
+            SELECT task_id FROM tasks
+            WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ?
+          ) OR (task_id IS NULL AND resolved_at IS NOT NULL AND resolved_at < ?)
+        `).run(cutoff, cutoff);
+
+        // 4. Delete task transitions
+        this.db.prepare(`
+          DELETE FROM task_transitions
+          WHERE task_id IN (
+            SELECT task_id FROM tasks
+            WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ?
+          )
+        `).run(cutoff);
+
+        // 5. Delete approvals
+        this.db.prepare(`
+          DELETE FROM approvals
+          WHERE (status IN ('approved', 'rejected') AND decided_at IS NOT NULL AND decided_at < ?)
+             OR (subject = 'task' AND subject_id IN (
+                  SELECT task_id FROM tasks
+                  WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ?
+                ))
+        `).run(cutoff, cutoff);
+
+        // 6. Delete tasks
+        this.db.prepare(`
+          DELETE FROM tasks
+          WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ?
+        `).run(cutoff);
       });
     }
+
+    // Persist maintenance log record
+    this.insertMaintenanceLog({
+      id: `maint_${randomUUID()}`,
+      action: dryRun ? "prune_simulation" : "prune_execution",
+      details: result,
+      createdAt: new Date().toISOString(),
+    });
 
     return result;
   }
 
-  checkpointAndCompact(): { checkpoint: string; vacuumed: boolean } {
-    this.db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  checkpointAndCompact(): {
+    checkpoint: string;
+    busy: boolean;
+    logPages: number;
+    checkpointedPages: number;
+    vacuumed: boolean;
+  } {
+    const row = this.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as
+      | { busy?: number; log?: number; checkpointed?: number }
+      | undefined;
+    const busy = (row?.busy ?? 0) !== 0;
+    const logPages = row?.log ?? 0;
+    const checkpointedPages = row?.checkpointed ?? 0;
     this.db.exec("VACUUM;");
-    return { checkpoint: "TRUNCATE", vacuumed: true };
+    const result = {
+      checkpoint: "TRUNCATE",
+      busy,
+      logPages,
+      checkpointedPages,
+      vacuumed: true,
+    };
+    try {
+      this.insertMaintenanceLog({
+        id: `maint_${randomUUID()}`,
+        action: "compact",
+        details: result,
+        createdAt: new Date().toISOString(),
+      });
+    } catch {
+      // Best effort
+    }
+    return result;
+  }
+
+  insertMaintenanceLog(record: MaintenanceLogRecord): void {
+    this.db.prepare(`
+      INSERT INTO maintenance_log (id, action, details_json, created_at)
+      VALUES (?, ?, ?, ?)
+    `).run(record.id, record.action, JSON.stringify(record.details), record.createdAt);
+  }
+
+  listMaintenanceLogs(limit = 50): MaintenanceLogRecord[] {
+    const rows = this.db.prepare(`
+      SELECT id, action, details_json, created_at
+      FROM maintenance_log
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(limit) as Array<{ id: string; action: string; details_json: string; created_at: string }>;
+    return rows.map((r) => ({
+      id: String(r.id),
+      action: r.action as "prune" | "compact",
+      details: json(r.details_json),
+      createdAt: String(r.created_at),
+    }));
+  }
+
+  countTasks(): number {
+    const row = this.db.prepare("SELECT COUNT(*) as count FROM tasks").get() as { count: number };
+    return Number(row.count);
+  }
+
+  countMessages(): number {
+    const row = this.db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number };
+    return Number(row.count);
+  }
+
+  countApprovals(): number {
+    const row = this.db.prepare("SELECT COUNT(*) as count FROM approvals").get() as { count: number };
+    return Number(row.count);
+  }
+
+  countArtifacts(): number {
+    const row = this.db.prepare("SELECT COUNT(*) as count FROM artifacts").get() as { count: number };
+    return Number(row.count);
+  }
+
+  getAuditTasks(options?: AuditExportOptions): TaskRecord[] {
+    let query = "SELECT * FROM tasks";
+    const params: Array<string | number> = [];
+    if (options?.since) {
+      query += " WHERE created_at >= ?";
+      params.push(options.since);
+    }
+    query += " ORDER BY created_at ASC";
+    if (options?.limit) {
+      query += " LIMIT ?";
+      params.push(options.limit);
+    }
+    const rows = this.db.prepare(query).all(...params) as Row[];
+    return rows.map(mapTask);
+  }
+
+  getAuditMessages(options?: AuditExportOptions): MessageRecord[] {
+    let query = "SELECT * FROM messages";
+    const params: Array<string | number> = [];
+    if (options?.since) {
+      query += " WHERE created_at >= ?";
+      params.push(options.since);
+    }
+    query += " ORDER BY created_at ASC";
+    if (options?.limit) {
+      query += " LIMIT ?";
+      params.push(options.limit);
+    }
+    const rows = this.db.prepare(query).all(...params) as Row[];
+    return rows.map(mapMessage);
+  }
+
+  getAuditApprovals(options?: AuditExportOptions): PendingApproval[] {
+    let query = "SELECT * FROM approvals";
+    const params: Array<string | number> = [];
+    if (options?.since) {
+      query += " WHERE created_at >= ?";
+      params.push(options.since);
+    }
+    query += " ORDER BY created_at ASC";
+    if (options?.limit) {
+      query += " LIMIT ?";
+      params.push(options.limit);
+    }
+    const rows = this.db.prepare(query).all(...params) as Row[];
+    return rows.map(mapApproval);
+  }
+
+  getAuditArtifacts(options?: AuditExportOptions): ArtifactRecord[] {
+    let query = "SELECT * FROM artifacts";
+    const params: Array<string | number> = [];
+    if (options?.since) {
+      query += " WHERE created_at >= ?";
+      params.push(options.since);
+    }
+    query += " ORDER BY created_at ASC";
+    if (options?.limit) {
+      query += " LIMIT ?";
+      params.push(options.limit);
+    }
+    const rows = this.db.prepare(query).all(...params) as Row[];
+    return rows.map((r) => mapArtifact(r, false));
   }
 }
 

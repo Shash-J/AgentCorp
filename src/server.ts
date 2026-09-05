@@ -144,7 +144,7 @@ export class AgentCorpServer {
       ? (options.daemonFilePath ? resolve(options.daemonFilePath) : null)
       : (this.port === 0 ? null : resolve(".agentcorp/daemon.json"));
     this.auditOnShutdown = options.auditOnShutdown ?? true;
-    this.maxBodySizeBytes = options.maxBodySizeBytes ?? DEFAULT_MAX_BODY_SIZE_BYTES;
+    this.maxBodySizeBytes = options.maxBodySizeBytes ?? broker.config.limits?.max_request_body_bytes ?? DEFAULT_MAX_BODY_SIZE_BYTES;
     this.broker.on("event", this.eventListener);
   }
 
@@ -488,23 +488,28 @@ export class AgentCorpServer {
 
     if (path === "/api/tasks" && method === "GET") {
       const paginated = this.database.listAllTasksPaginated(paginationOpts);
+      const totalCount = this.database.countTasks();
+      res.setHeader("X-Total-Count", String(totalCount));
       if (paginated.nextCursor) res.setHeader("X-Next-Cursor", paginated.nextCursor);
-      this.sendJson(res, 200, envelope ? paginated : paginated.items);
+      this.sendJson(res, 200, envelope ? { ...paginated, total: totalCount } : paginated.items);
       return;
     }
 
     if (path === "/api/messages" && method === "GET") {
       const paginated = this.database.listAllMessagesPaginated(paginationOpts);
+      const totalCount = this.database.countMessages();
+      res.setHeader("X-Total-Count", String(totalCount));
       if (paginated.nextCursor) res.setHeader("X-Next-Cursor", paginated.nextCursor);
-      this.sendJson(res, 200, envelope ? paginated : paginated.items);
+      this.sendJson(res, 200, envelope ? { ...paginated, total: totalCount } : paginated.items);
       return;
     }
 
     if (path === "/api/maintenance/prune" && method === "POST") {
-      const body = await this.readJsonBody<{ olderThanDays?: number; dryRun?: boolean }>(req);
+      const body = await this.readJsonBody<{ olderThanDays?: number; dryRun?: boolean; deleteArtifacts?: boolean }>(req);
       const result = this.broker.prune({
         olderThanDays: body.olderThanDays ?? 30,
         dryRun: body.dryRun ?? false,
+        deleteArtifacts: body.deleteArtifacts ?? false,
       });
       this.sendJson(res, 200, result);
       return;

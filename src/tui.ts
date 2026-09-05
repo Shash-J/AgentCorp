@@ -265,20 +265,32 @@ ${c.cyan}└──────────────────────�
     }
 
     let tasks: TaskRecord[] = [];
+    let totalTasksCount = 0;
     if (this.daemonUrl && this.adminToken) {
       try {
         const res = await fetch(`${this.daemonUrl}/api/tasks`, {
           headers: { Authorization: `Bearer ${this.adminToken}` },
         });
-        if (res.ok) tasks = (await res.json()) as TaskRecord[];
+        if (res.ok) {
+          tasks = (await res.json()) as TaskRecord[];
+          const totalHeader = res.headers.get("X-Total-Count");
+          totalTasksCount = totalHeader ? parseInt(totalHeader, 10) : tasks.length;
+        }
       } catch {}
     } else if (this.broker) {
       tasks = this.broker.database.listAllTasks();
+      totalTasksCount = this.broker.database.countTasks();
+    } else {
+      totalTasksCount = tasks.length;
     }
+
+    const tasksLabel = totalTasksCount > tasks.length
+      ? `${totalTasksCount} (Active Page: ${tasks.length})`
+      : `${totalTasksCount}`;
 
     console.log(` ${c.bold}Status Summary:${c.reset}`);
     console.log(`   Pending Approvals: ${pending.length > 0 ? `${c.yellow}${c.bold}${pending.length}${c.reset}` : `${c.green}0 (Clean)${c.reset}`}`);
-    console.log(`   Total Tasks:       ${c.cyan}${tasks.length}${c.reset}`);
+    console.log(`   Total Tasks:       ${c.cyan}${tasksLabel}${c.reset}`);
     if (this.daemonUrl) {
       console.log(`   Daemon URL:        ${c.blue}${this.daemonUrl}${c.reset}`);
       console.log(`   Web Dashboard:     ${c.blue}${this.daemonUrl}/console${c.reset}`);

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { AgentCorpDatabase, policyFromConfig } from "./database.js";
+import { AgentCorpDatabase, encodeCursor, parseLimit, policyFromConfig } from "./database.js";
 import { AgentCorpError, invariant } from "./errors.js";
 import { evaluatePolicy } from "./policy.js";
 import {
@@ -96,8 +96,8 @@ export class AgentCorpBroker extends EventEmitter {
     super();
     this.config = config;
     this.database = database;
-    this.maxPayloadSizeBytes = options.limits?.maxPayloadSizeBytes ?? DEFAULT_MAX_PAYLOAD_SIZE_BYTES;
-    this.maxArtifactSizeBytes = options.limits?.maxArtifactSizeBytes ?? DEFAULT_MAX_ARTIFACT_SIZE_BYTES;
+    this.maxPayloadSizeBytes = options.limits?.maxPayloadSizeBytes ?? config.limits?.max_message_payload_bytes ?? config.limits?.max_payload_size_bytes ?? DEFAULT_MAX_PAYLOAD_SIZE_BYTES;
+    this.maxArtifactSizeBytes = options.limits?.maxArtifactSizeBytes ?? config.limits?.max_artifact_bytes ?? config.limits?.max_artifact_size_bytes ?? DEFAULT_MAX_ARTIFACT_SIZE_BYTES;
     this.roles = new Map(config.roles.map((role) => [role.id, role]));
     this.now = options.now ?? (() => new Date());
     this.id = options.id ?? ((prefix) => `${prefix}_${randomUUID()}`);
@@ -555,22 +555,76 @@ export class AgentCorpBroker extends EventEmitter {
     return artifact;
   }
 
-  listArtifactsPaginated(callerRole: string, taskId?: string, options?: PaginationOptions): PaginatedResult<ArtifactRecord> {
+  listArtifactsPaginated(
+    callerRole: string,
+    taskIdOrOptions?: string | PaginationOptions,
+    maybeOptions?: PaginationOptions,
+  ): PaginatedResult<ArtifactRecord> {
     this.role(callerRole);
+    let taskId: string | null = null;
+    let options: PaginationOptions | undefined;
+    if (typeof taskIdOrOptions === "string") {
+      taskId = taskIdOrOptions;
+      options = maybeOptions;
+    } else if (taskIdOrOptions && typeof taskIdOrOptions === "object") {
+      options = taskIdOrOptions;
+    } else {
+      options = maybeOptions;
+    }
+
     if (taskId) {
       const task = this.database.getTask(taskId);
       invariant(task, "TASK_NOT_FOUND", `Task not found: ${taskId}`);
       this.assertTaskParticipant(task, callerRole);
     }
-    const result = this.database.listArtifactsPaginated(taskId ?? null, options);
+    const targetLimit = parseLimit(options?.limit);
+    const collected: ArtifactRecord[] = [];
+    let currentCursor = options?.cursor;
+    let nextCursor: string | null = null;
+
+    // Scan and fill until targetLimit visible items are collected or no more rows exist in DB
+    while (collected.length < targetLimit) {
+      const pageResult = this.database.listArtifactsPaginated(taskId, {
+        limit: Math.max(targetLimit, 20),
+        cursor: currentCursor,
+      });
+      if (pageResult.items.length === 0) {
+        nextCursor = null;
+        break;
+      }
+      for (const artifact of pageResult.items) {
+        if (this.canSeeArtifact(artifact, callerRole)) {
+          collected.push(artifact);
+          if (collected.length === targetLimit) {
+            nextCursor = encodeCursor(artifact.createdAt, artifact.artifactId);
+            break;
+          }
+        }
+      }
+      if (!pageResult.nextCursor) {
+        if (collected.length < targetLimit) {
+          nextCursor = null;
+        }
+        break;
+      }
+      currentCursor = pageResult.nextCursor;
+      if (!nextCursor) {
+        nextCursor = pageResult.nextCursor;
+      }
+    }
+
     return {
-      items: result.items.filter((artifact) => this.canSeeArtifact(artifact, callerRole)),
-      nextCursor: result.nextCursor,
+      items: collected,
+      nextCursor,
     };
   }
 
-  listArtifacts(callerRole: string, taskId?: string, options?: PaginationOptions): ArtifactRecord[] {
-    return this.listArtifactsPaginated(callerRole, taskId, options).items;
+  listArtifacts(
+    callerRole: string,
+    taskIdOrOptions?: string | PaginationOptions,
+    maybeOptions?: PaginationOptions,
+  ): ArtifactRecord[] {
+    return this.listArtifactsPaginated(callerRole, taskIdOrOptions, maybeOptions).items;
   }
 
   getArtifact(callerRole: string, artifactId: string): ArtifactRecord {
@@ -842,7 +896,13 @@ export class AgentCorpBroker extends EventEmitter {
     return result;
   }
 
-  checkpointAndCompact(): { checkpoint: string; vacuumed: boolean } {
+  checkpointAndCompact(): {
+    checkpoint: string;
+    busy: boolean;
+    logPages: number;
+    checkpointedPages: number;
+    vacuumed: boolean;
+  } {
     return this.database.checkpointAndCompact();
   }
 

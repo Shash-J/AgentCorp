@@ -146,6 +146,21 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 4,
+    name: "add_maintenance_log",
+    up: (db: DatabaseSync) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS maintenance_log (
+          id TEXT PRIMARY KEY,
+          action TEXT NOT NULL,
+          details_json TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS idx_maintenance_log_created_at ON maintenance_log(created_at, id);
+      `);
+    },
+  },
 ];
 
 export function ensureMigrationTable(db: DatabaseSync): void {

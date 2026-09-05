@@ -1,6 +1,11 @@
 [company]
 name = "Example Agent Company"
 
+[limits]
+max_request_body_bytes = 2097152
+max_message_payload_bytes = 1048576
+max_artifact_bytes = 5242880
+
 [[roles]]
 id = "architect"
 display_name = "Architect"

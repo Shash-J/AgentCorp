@@ -4,18 +4,7 @@ import { parse } from "smol-toml";
 import { AgentCorpError, invariant } from "./errors.js";
 import { OrgConfigSchema, type OrgConfig } from "./types.js";
 
-export function loadOrgConfig(path = "org.toml"): OrgConfig {
-  const absolutePath = resolve(path);
-  let raw: string;
-  try {
-    raw = readFileSync(absolutePath, "utf8");
-  } catch (error) {
-    throw new AgentCorpError(
-      "CONFIG_NOT_FOUND",
-      `Could not read organization configuration at ${absolutePath}: ${String(error)}`,
-    );
-  }
-
+export function parseOrgConfig(raw: string): OrgConfig {
   const result = OrgConfigSchema.safeParse(parse(raw));
   if (!result.success) {
     throw new AgentCorpError(
@@ -43,4 +32,19 @@ export function loadOrgConfig(path = "org.toml"): OrgConfig {
     }
   }
   return result.data;
+}
+
+export function loadOrgConfig(path = "org.toml"): OrgConfig {
+  const absolutePath = resolve(path);
+  let raw: string;
+  try {
+    raw = readFileSync(absolutePath, "utf8");
+  } catch (error) {
+    throw new AgentCorpError(
+      "CONFIG_NOT_FOUND",
+      `Could not read organization configuration at ${absolutePath}: ${String(error)}`,
+    );
+  }
+
+  return parseOrgConfig(raw);
 }
