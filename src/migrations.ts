@@ -199,6 +199,32 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 7,
+    name: "fix_idempotency_composite_key",
+    up: (db: DatabaseSync) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS idempotency_keys_new (
+          role_id TEXT NOT NULL,
+          key TEXT NOT NULL,
+          operation TEXT NOT NULL,
+          request_hash TEXT,
+          response_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (role_id, key)
+        ) STRICT;
+
+        INSERT OR IGNORE INTO idempotency_keys_new (role_id, key, operation, request_hash, response_json, created_at)
+        SELECT role_id, key, operation, request_hash, response_json, created_at FROM idempotency_keys;
+
+        DROP TABLE idempotency_keys;
+
+        ALTER TABLE idempotency_keys_new RENAME TO idempotency_keys;
+
+        CREATE INDEX IF NOT EXISTS idx_idempotency_role ON idempotency_keys(role_id, created_at);
+      `);
+    },
+  },
 ];
 
 export function ensureMigrationTable(db: DatabaseSync): void {

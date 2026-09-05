@@ -14,14 +14,14 @@ describe("migrations", () => {
     try {
       expect(getCurrentSchemaVersion(rawDb)).toBe(0);
       const result = runMigrations(rawDb);
-      expect(result.applied).toEqual([1, 2, 3, 4, 5, 6]);
-      expect(result.currentVersion).toBe(6);
-      expect(getCurrentSchemaVersion(rawDb)).toBe(6);
+      expect(result.applied).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      expect(result.currentVersion).toBe(7);
+      expect(getCurrentSchemaVersion(rawDb)).toBe(7);
 
       // Re-running migrations is idempotent
       const rerun = runMigrations(rawDb);
       expect(rerun.applied).toEqual([]);
-      expect(rerun.currentVersion).toBe(6);
+      expect(rerun.currentVersion).toBe(7);
     } finally {
       rawDb.close();
     }
@@ -44,7 +44,7 @@ describe("migrations", () => {
   it("initializes schema properly via AgentCorpDatabase", () => {
     const db = new AgentCorpDatabase(":memory:");
     try {
-      expect(db.getSchemaVersion()).toBe(6);
+      expect(db.getSchemaVersion()).toBe(7);
       expect(db.listAllTasks()).toEqual([]);
       expect(db.listAllMessages()).toEqual([]);
       expect(db.listAllApprovals()).toEqual([]);
@@ -67,8 +67,8 @@ describe("migrations", () => {
 
       // Run migrations; ensureMigrationTable must detect missing name column and alter it safely
       const result = runMigrations(rawDb);
-      expect(result.applied).toEqual([1, 2, 3, 4, 5, 6]);
-      expect(result.currentVersion).toBe(6);
+      expect(result.applied).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      expect(result.currentVersion).toBe(7);
 
       const cols = rawDb.prepare("PRAGMA table_info(schema_migrations)").all() as Array<{ name: string }>;
       expect(cols.some((c) => c.name === "name")).toBe(true);

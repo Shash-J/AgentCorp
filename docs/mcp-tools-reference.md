@@ -204,3 +204,33 @@ Fetches complete artifact content and metadata after verifying that the caller's
 * **Inputs**:
   * `artifact_id` *(string, required)*: Artifact ID to retrieve.
 * **Returns**: Complete `ArtifactRecord` including `content` or `contentUri`.
+
+---
+
+## 5. Idempotency & Operation Lookup
+
+### `get_operation`
+Look up a previously executed idempotent operation result by its idempotency key.
+
+* **Inputs**:
+  * `idempotency_key` *(string, required)*: The idempotency key passed during operation execution.
+* **Returns**:
+  ```json
+  {
+    "found": true,
+    "operation": {
+      "key": "create-task-001",
+      "roleId": "developer",
+      "operation": "createTask",
+      "requestHash": "a1b2c3...",
+      "responseJson": "{\"taskId\":\"task_...\"}",
+      "createdAt": "2026-09-05T00:00:00.000Z"
+    }
+  }
+  ```
+
+> [!NOTE]
+> All mutation tools (`create_task`, `send_message`, `accept_handoff`, `create_artifact`, `update_task_status`) accept an optional `idempotency_key` string.
+> Replays with identical keys and request payloads return cached results atomically.
+> Replaying a key with a mismatched operation or mismatched payload raises `IDEMPOTENCY_CONFLICT`.
+

@@ -172,7 +172,13 @@ export class AgentCorpDatabase {
     this.db.close();
   }
 
+  private transactionDepth = 0;
+
   transaction<T>(operation: () => T): T {
+    if (this.transactionDepth > 0) {
+      return operation();
+    }
+    this.transactionDepth++;
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const result = operation();
@@ -181,6 +187,8 @@ export class AgentCorpDatabase {
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
+    } finally {
+      this.transactionDepth--;
     }
   }
 
@@ -314,28 +322,33 @@ export class AgentCorpDatabase {
       const lastSeenMs = lastSeenStr ? new Date(lastSeenStr).getTime() : nowMs;
       const diffMs = nowMs - lastSeenMs;
       let status: "online" | "idle" | "offline" = "online";
+      let activityFreshness: "fresh" | "idle" | "stale" = "fresh";
       if (diffMs > 300000) { // > 5 minutes
         status = "offline";
+        activityFreshness = "stale";
       } else if (diffMs > 60000) { // > 1 minute
         status = "idle";
+        activityFreshness = "idle";
       }
       return {
         roleId: r.role_id,
         agentId: r.agent_id,
         connectedAt: r.connected_at,
         lastSeenAt: lastSeenStr,
+        lastActiveAt: lastSeenStr,
         status,
+        activityFreshness,
       };
     });
   }
 
   saveIdempotency(record: IdempotencyRecord): void {
     this.db.prepare(`
-      INSERT OR REPLACE INTO idempotency_keys (key, role_id, operation, request_hash, response_json, created_at)
+      INSERT OR REPLACE INTO idempotency_keys (role_id, key, operation, request_hash, response_json, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(
-      record.key,
       record.roleId,
+      record.key,
       record.operation,
       record.requestHash ?? null,
       record.responseJson,
@@ -345,13 +358,13 @@ export class AgentCorpDatabase {
 
   getIdempotency(key: string, roleId: string): IdempotencyRecord | undefined {
     const row = this.db.prepare(`
-      SELECT key, role_id, operation, request_hash, response_json, created_at
+      SELECT role_id, key, operation, request_hash, response_json, created_at
       FROM idempotency_keys
-      WHERE key = ? AND role_id = ?
-    `).get(key, roleId) as
+      WHERE role_id = ? AND key = ?
+    `).get(roleId, key) as
       | {
-          key: string;
           role_id: string;
+          key: string;
           operation: string;
           request_hash?: string | null;
           response_json: string;
@@ -1276,8 +1289,25 @@ export class AgentCorpDatabase {
 
   getAuditMessages(options?: AuditExportOptions): MessageRecord[] {
     const limit = parseLimit(options?.limit, DEFAULT_AUDIT_LIMIT, MAX_AUDIT_LIMIT);
-    let query = "SELECT * FROM messages";
+    const maxBytes = options?.maxPayloadBytes;
     const params: Array<string | number> = [];
+    
+    let query: string;
+    if (maxBytes !== undefined && maxBytes > 0) {
+      query = `SELECT 
+        message_id, task_id, from_role, to_role, type,
+        CASE 
+          WHEN LENGTH(payload) > ? THEN SUBSTR(payload, 1, ?)
+          ELSE payload 
+        END AS payload,
+        LENGTH(payload) AS payload_full_length,
+        references_json, in_reply_to, status, risk_tags, created_at, resolved_at
+      FROM messages`;
+      params.push(maxBytes, maxBytes);
+    } else {
+      query = "SELECT *, LENGTH(payload) AS payload_full_length FROM messages";
+    }
+
     if (options?.since) {
       query += " WHERE created_at >= ?";
       params.push(options.since);
@@ -1285,7 +1315,30 @@ export class AgentCorpDatabase {
     query += " ORDER BY created_at DESC, message_id DESC LIMIT ?";
     params.push(limit);
     const rows = this.db.prepare(query).all(...params) as Row[];
-    const items = rows.map(mapMessage);
+    const items = rows.map((r) => {
+      const fullLen = typeof r.payload_full_length === "number" ? r.payload_full_length : 0;
+      if (maxBytes !== undefined && maxBytes > 0 && fullLen > maxBytes) {
+        return {
+          messageId: r.message_id as string,
+          taskId: (r.task_id as string | null) ?? null,
+          fromRole: r.from_role as string,
+          toRole: r.to_role as string,
+          type: r.type as MessageRecord["type"],
+          payload: {
+            _truncated: true,
+            byteLength: fullLen,
+            preview: (r.payload as string).slice(0, Math.min(256, maxBytes)) + "... [truncated]",
+          },
+          references: JSON.parse((r.references_json as string | null) ?? "[]") as string[],
+          inReplyTo: (r.in_reply_to as string | null) ?? null,
+          status: r.status as MessageRecord["status"],
+          riskTags: JSON.parse((r.risk_tags as string | null) ?? "[]") as string[],
+          createdAt: r.created_at as string,
+          resolvedAt: (r.resolved_at as string | null) ?? null,
+        };
+      }
+      return mapMessage(r);
+    });
     items.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.messageId.localeCompare(b.messageId));
     return items;
   }
@@ -1308,8 +1361,25 @@ export class AgentCorpDatabase {
 
   getAuditArtifacts(options?: AuditExportOptions): ArtifactRecord[] {
     const limit = parseLimit(options?.limit, DEFAULT_AUDIT_LIMIT, MAX_AUDIT_LIMIT);
-    let query = "SELECT * FROM artifacts";
+    const maxBytes = options?.maxPayloadBytes;
     const params: Array<string | number> = [];
+
+    let query: string;
+    if (maxBytes !== undefined && maxBytes > 0) {
+      query = `SELECT
+        artifact_id, type, name, produced_by, content_hash,
+        CASE
+          WHEN content IS NOT NULL AND LENGTH(content) > ? THEN SUBSTR(content, 1, ?)
+          ELSE content
+        END AS content,
+        CASE WHEN content IS NOT NULL THEN LENGTH(content) ELSE NULL END AS content_full_length,
+        content_uri, visible_to_roles, related_task_id, created_at
+      FROM artifacts`;
+      params.push(maxBytes, maxBytes);
+    } else {
+      query = "SELECT *, CASE WHEN content IS NOT NULL THEN LENGTH(content) ELSE NULL END AS content_full_length FROM artifacts";
+    }
+
     if (options?.since) {
       query += " WHERE created_at >= ?";
       params.push(options.since);
@@ -1317,7 +1387,17 @@ export class AgentCorpDatabase {
     query += " ORDER BY created_at DESC, artifact_id DESC LIMIT ?";
     params.push(limit);
     const rows = this.db.prepare(query).all(...params) as Row[];
-    const items = rows.map((r) => mapArtifact(r, false));
+    const items = rows.map((r) => {
+      const fullLen = typeof r.content_full_length === "number" ? r.content_full_length : 0;
+      if (maxBytes !== undefined && maxBytes > 0 && fullLen > maxBytes) {
+        const item = mapArtifact(r, false);
+        return {
+          ...item,
+          content: (r.content as string).slice(0, Math.min(256, maxBytes)) + "... [truncated]",
+        };
+      }
+      return mapArtifact(r, false);
+    });
     items.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.artifactId.localeCompare(b.artifactId));
     return items;
   }

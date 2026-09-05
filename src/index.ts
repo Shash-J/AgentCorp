@@ -32,6 +32,9 @@ export {
   createStdioProxy,
   ensureDaemonRunning,
   isDaemonHealthy,
+  isRetryableTransportError,
+  MUTATION_TOOLS,
+  resolveDefaultPath,
   runStdioAdapter,
   ResilientDaemonClient,
 } from "./stdio-adapter.js";
@@ -40,6 +43,7 @@ export {
   RotatingLogger,
   recordCrashDiagnostics,
   runDoctor,
+  sanitizeBrokerEventForLog,
 } from "./diagnostics.js";
 export type { DoctorCheck, DoctorReport, LogRotationOptions } from "./diagnostics.js";
 export { AgentCorpTui } from "./tui.js";

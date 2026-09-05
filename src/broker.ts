@@ -152,24 +152,38 @@ export class AgentCorpBroker extends EventEmitter {
     if (!idempotencyKey) {
       return fn();
     }
+    const currentHash = createHash("sha256")
+      .update(JSON.stringify(requestPayload ?? null))
+      .digest("hex");
     const existing = this.database.getIdempotency(idempotencyKey, callerRole);
     if (existing) {
+      if (existing.operation !== operation) {
+        throw new AgentCorpError(
+          "IDEMPOTENCY_CONFLICT",
+          `Idempotency key '${idempotencyKey}' was already used for operation '${existing.operation}', cannot reuse for '${operation}'`,
+        );
+      }
+      if (existing.requestHash && existing.requestHash !== currentHash) {
+        throw new AgentCorpError(
+          "IDEMPOTENCY_CONFLICT",
+          `Idempotency key '${idempotencyKey}' was already used with a different request payload`,
+        );
+      }
       return JSON.parse(existing.responseJson) as T;
     }
-    const result = fn();
-    try {
+
+    return this.database.transaction(() => {
+      const result = fn();
       this.database.saveIdempotency({
         key: idempotencyKey,
         roleId: callerRole,
         operation,
-        requestHash: createHash("sha256").update(JSON.stringify(requestPayload ?? null)).digest("hex"),
+        requestHash: currentHash,
         responseJson: JSON.stringify(result),
         createdAt: this.timestamp(),
       });
-    } catch {
-      // Non-critical if table not yet migrated
-    }
-    return result;
+      return result;
+    });
   }
 
   getOperation(callerRole: string, key: string): IdempotencyRecord | undefined {

@@ -96,12 +96,20 @@ export const LimitsConfigSchema = z
 export type LimitsConfig = z.infer<typeof LimitsConfigSchema>;
 export const DEFAULT_MAX_AUDIT_PAYLOAD_BYTES = 65536; // 64 KB
 
+/**
+ * RolePresence tracks agent connectivity and activity freshness.
+ * Note: lastSeenAt / lastActiveAt reflects when the role last performed an action (activity freshness),
+ * whereas status ("online" | "idle" | "offline") and activityFreshness ("fresh" | "idle" | "stale")
+ * provide temporal indicators for collaboration visibility.
+ */
 export interface RolePresence {
   roleId: string;
   agentId?: string | undefined;
   lastSeenAt?: string | undefined;
+  lastActiveAt?: string | undefined;
   connectedAt?: string | undefined;
   status: "online" | "idle" | "offline";
+  activityFreshness?: "fresh" | "idle" | "stale" | undefined;
 }
 
 export interface IdempotencyRecord {

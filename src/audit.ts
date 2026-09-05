@@ -57,54 +57,26 @@ export function generateAuditSnapshot(
   const matchingArtifactsCount = db.countAuditArtifacts(options);
 
   const effectiveLimit = parseLimit(options.limit, DEFAULT_AUDIT_LIMIT, MAX_AUDIT_LIMIT);
-  const exportOptions: AuditExportOptions = {
-    ...options,
-    limit: effectiveLimit,
-  };
-
   const effectiveMaxPayloadBytes = options.maxPayloadBytes !== undefined
     ? options.maxPayloadBytes
     : (broker.config.limits?.max_audit_payload_bytes ?? DEFAULT_MAX_AUDIT_PAYLOAD_BYTES);
 
-  const tasks = db.getAuditTasks(exportOptions);
-  const rawMessages = db.getAuditMessages(exportOptions);
-  const messages = effectiveMaxPayloadBytes && effectiveMaxPayloadBytes > 0
-    ? rawMessages.map((msg) => {
-        const payloadStr = typeof msg.payload === "string" ? msg.payload : JSON.stringify(msg.payload);
-        const byteLen = Buffer.byteLength(payloadStr, "utf8");
-        if (byteLen > effectiveMaxPayloadBytes) {
-          return {
-            ...msg,
-            payload: {
-              _truncated: true,
-              byteLength: byteLen,
-              preview: payloadStr.slice(0, Math.min(256, effectiveMaxPayloadBytes)) + "... [truncated]",
-            },
-          };
-        }
-        return msg;
-      })
-    : rawMessages;
+  const exportOptions: AuditExportOptions = {
+    ...options,
+    limit: effectiveLimit,
+    maxPayloadBytes: effectiveMaxPayloadBytes,
+  };
 
+  const tasks = db.getAuditTasks(exportOptions);
+  const messages = db.getAuditMessages(exportOptions);
   const approvals = db.getAuditApprovals(exportOptions);
-  const rawArtifacts = db.getAuditArtifacts(exportOptions);
-  const artifacts = effectiveMaxPayloadBytes && effectiveMaxPayloadBytes > 0
-    ? rawArtifacts.map((art) => {
-        if (art.content && Buffer.byteLength(art.content, "utf8") > effectiveMaxPayloadBytes) {
-          return {
-            ...art,
-            content: art.content.slice(0, Math.min(256, effectiveMaxPayloadBytes)) + "... [truncated]",
-          };
-        }
-        return art;
-      })
-    : rawArtifacts;
+  const artifacts = db.getAuditArtifacts(exportOptions);
 
   const truncated = Boolean(
     tasks.length < matchingTasksCount ||
-    rawMessages.length < matchingMessagesCount ||
+    messages.length < matchingMessagesCount ||
     approvals.length < matchingApprovalsCount ||
-    rawArtifacts.length < matchingArtifactsCount
+    artifacts.length < matchingArtifactsCount
   );
 
   const metadata: AuditSnapshotMetadata = {

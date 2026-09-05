@@ -142,7 +142,7 @@ export class AgentCorpServer {
     if (options.host !== undefined) this.host = options.host;
     this.daemonFilePath = options.daemonFilePath !== undefined
       ? (options.daemonFilePath ? resolve(options.daemonFilePath) : null)
-      : (this.port === 0 ? null : resolve(".agentcorp/daemon.json"));
+      : resolve(".agentcorp/daemon.json");
     this.auditOnShutdown = options.auditOnShutdown ?? true;
     this.maxBodySizeBytes = options.maxBodySizeBytes ?? broker.config.limits?.max_request_body_bytes ?? DEFAULT_MAX_BODY_SIZE_BYTES;
     this.broker.on("event", this.eventListener);

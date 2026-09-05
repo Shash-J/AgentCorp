@@ -10,10 +10,10 @@ import { AgentCorpBroker } from "./broker.js";
 import { loadOrgConfig } from "./config.js";
 import { ensureCredentials, loadCredentials } from "./credentials.js";
 import { AgentCorpDatabase } from "./database.js";
-import { recordCrashDiagnostics, RotatingLogger, runDoctor } from "./diagnostics.js";
+import { recordCrashDiagnostics, RotatingLogger, runDoctor, sanitizeBrokerEventForLog } from "./diagnostics.js";
 import { AgentCorpError } from "./errors.js";
 import { AgentCorpServer, readDaemonInfo, type DaemonInfo } from "./server.js";
-import { ensureDaemonRunning, isDaemonHealthy, runStdioAdapter } from "./stdio-adapter.js";
+import { ensureDaemonRunning, isDaemonHealthy, resolveDefaultPath, runStdioAdapter } from "./stdio-adapter.js";
 import { AgentCorpTui } from "./tui.js";
 import type { InitialPolicy, PendingApproval, PolicyRule } from "./types.js";
 
@@ -106,6 +106,7 @@ action = "require_human"
 interface GlobalOptions {
   config: string;
   db: string;
+  credentials?: string | undefined;
 }
 
 function output(value: unknown): void {
@@ -191,7 +192,8 @@ function openBroker(options: GlobalOptions): { broker: AgentCorpBroker; db: Agen
 async function getAdminClient(options: GlobalOptions) {
   const live = await resolveDaemonInfo();
   if (live) {
-    const creds = loadCredentials();
+    const credPath = options.credentials ?? resolveDefaultPath({ configPath: options.config, dbPath: options.db }, "credentials.json");
+    const creds = loadCredentials(credPath);
     const adminToken = creds?.adminToken;
     if (adminToken) {
       const headers = {
@@ -312,7 +314,8 @@ const program = new Command()
   .description("Coordinate role-based AI agent teams over MCP")
   .version("0.1.0-alpha.1")
   .option("--config <path>", "organization configuration", "org.toml")
-  .option("--db <path>", "SQLite broker database", ".agentcorp/agentcorp.db");
+  .option("--db <path>", "SQLite broker database", ".agentcorp/agentcorp.db")
+  .option("--credentials <path>", "credentials file path");
 
 program
   .command("init")
@@ -347,7 +350,8 @@ program
   .option("--port <number>", "HTTP port to listen on", "54321")
   .option("--host <string>", "Host address to bind to", "127.0.0.1")
   .option("--daemon", "Run detached in the background")
-  .action(async (options: { port: string; host: string; daemon?: boolean }) => {
+  .option("--daemon-file <path>", "path to daemon.json control file")
+  .action(async (options: { port: string; host: string; daemon?: boolean; daemonFile?: string }) => {
     const gOpts = program.opts<GlobalOptions>();
     if (options.daemon) {
       const targetUrl = `http://${options.host}:${options.port}`;
@@ -356,7 +360,7 @@ program
         output({ startedInBackground: false, alreadyRunning: true, ...live.info });
         return;
       }
-      const recorded = readDaemonInfo();
+      const recorded = readDaemonInfo(options.daemonFile);
       if (recorded && (await isDaemonHealthy(recorded.url))) {
         output({
           startedInBackground: false,
@@ -379,6 +383,12 @@ program
         "--db",
         resolve(gOpts.db),
       ];
+      if (options.daemonFile) {
+        args.push("--daemon-file", resolve(options.daemonFile));
+      }
+      if (gOpts.credentials) {
+        args.push("--credentials", resolve(gOpts.credentials));
+      }
       const child = spawn(process.execPath, args, {
         detached: true,
         stdio: "ignore",
@@ -402,16 +412,19 @@ program
     }
 
     const { broker } = openBroker(gOpts);
-    const creds = ensureCredentials(broker.config);
+    const credPath = gOpts.credentials ?? resolveDefaultPath({ configPath: gOpts.config, dbPath: gOpts.db }, "credentials.json");
+    const creds = ensureCredentials(broker.config, credPath);
     const server = new AgentCorpServer(broker, creds, {
       port: parseInt(options.port, 10),
       host: options.host,
+      ...(options.daemonFile !== undefined ? { daemonFilePath: options.daemonFile } : {}),
     });
 
     const daemonLogger = new RotatingLogger(".agentcorp/daemon.log");
     daemonLogger.write(`AgentCorp daemon starting on ${options.host}:${options.port} (PID: ${process.pid}, config: ${gOpts.config}, db: ${gOpts.db})`);
     broker.on("event", (evt) => {
-      daemonLogger.write(`[event:${evt.type}] ${JSON.stringify(evt)}`);
+      const sanitized = sanitizeBrokerEventForLog(evt);
+      daemonLogger.write(`[event:${evt.type}] ${JSON.stringify(sanitized)}`);
     });
 
     const info = await server.start();
@@ -506,6 +519,7 @@ program
       role: options.role,
       configPath: gOpts.config,
       dbPath: gOpts.db,
+      credentialsPath: gOpts.credentials,
       noSpawn: options.spawn === false,
       daemonUrl: options.daemonUrl,
     });

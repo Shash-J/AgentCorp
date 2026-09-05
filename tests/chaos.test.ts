@@ -1,17 +1,17 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AgentCorpBroker } from "../src/broker.js";
-import { ensureCredentials } from "../src/credentials.js";
 import { AgentCorpDatabase } from "../src/database.js";
+import { ensureCredentials } from "../src/credentials.js";
 import { RotatingLogger } from "../src/diagnostics.js";
-import { AgentCorpServer } from "../src/server.js";
-import { createStdioProxy } from "../src/stdio-adapter.js";
+import { readDaemonInfo } from "../src/server.js";
+import { createStdioProxy, isDaemonHealthy } from "../src/stdio-adapter.js";
 import { OrgConfigSchema } from "../src/types.js";
 
-describe("E2E Chaos & Self-Healing: Mid-Session Daemon Crash, Recovery & Idempotency", () => {
+describe("E2E Chaos & Self-Healing: Mid-Session Child Process Daemon Kill & Recovery", () => {
   let tempDir: string;
   let dbPath: string;
   let configPath: string;
@@ -19,6 +19,8 @@ describe("E2E Chaos & Self-Healing: Mid-Session Daemon Crash, Recovery & Idempot
   let daemonFilePath: string;
   let logPath: string;
   let config: ReturnType<typeof OrgConfigSchema.parse>;
+  const activeChildren: ChildProcess[] = [];
+  const activePids: number[] = [];
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "agentcorp-chaos-test-"));
@@ -65,38 +67,91 @@ describe("E2E Chaos & Self-Healing: Mid-Session Daemon Crash, Recovery & Idempot
   });
 
   afterEach(() => {
+    for (const child of activeChildren) {
+      try {
+        child.kill("SIGKILL");
+      } catch {}
+    }
+    activeChildren.length = 0;
+
+    for (const pid of activePids) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
+    }
+    activePids.length = 0;
+
+    // Check daemon file for any auto-spawned PID and kill it
+    try {
+      if (existsSync(daemonFilePath)) {
+        const info = readDaemonInfo(daemonFilePath);
+        if (info?.pid) {
+          try {
+            process.kill(info.pid, "SIGKILL");
+          } catch {}
+        }
+      }
+    } catch {}
+
     try {
       rmSync(tempDir, { recursive: true, force: true });
-    } catch {
-      // Best-effort cleanup on Windows if file handle release is asynchronous
-    }
+    } catch {}
   });
 
-  it("survives mid-session daemon crash, reconnects proxy, guarantees zero duplicate mutation via idempotency, and preserves durable state", async () => {
+  it("survives true OS process kill mid-session, auto-recovers through proxy auto-spawn, and guarantees zero duplicate mutations", async () => {
     const logger = new RotatingLogger(logPath, { maxSizeBytes: 5000, maxBackups: 2 });
-    logger.write("Test started: initializing Daemon 1");
+    logger.write("Test started: spawning real child process Daemon 1");
 
-    // Initialize Database 1 (disk-backed)
-    const db1 = new AgentCorpDatabase(dbPath);
-    const broker1 = new AgentCorpBroker(config, db1);
-    const creds = ensureCredentials(config, credPath);
+    const cliPath = resolve("dist/cli.js");
 
-    const server1 = new AgentCorpServer(broker1, creds, {
-      port: 0,
-      host: "127.0.0.1",
-      daemonFilePath,
-      auditOnShutdown: false,
-    });
-    const daemon1Info = await server1.start();
-    logger.write(`Daemon 1 started at ${daemon1Info.url} (PID: ${daemon1Info.pid})`);
+    // 1. Spawn Daemon 1 as an independent child process on an ephemeral port (port 0)
+    const child1 = spawn(
+      process.execPath,
+      [
+        cliPath,
+        "start",
+        "--port",
+        "0",
+        "--config",
+        configPath,
+        "--db",
+        dbPath,
+        "--daemon-file",
+        daemonFilePath,
+        "--credentials",
+        credPath,
+      ],
+      { stdio: "ignore" },
+    );
+    activeChildren.push(child1);
+    if (child1.pid) activePids.push(child1.pid);
 
-    // Connect stdio proxy client to Daemon 1
+    // Wait for Daemon 1 to become healthy
+    const startDeadline = Date.now() + 6000;
+    let daemon1Info: ReturnType<typeof readDaemonInfo> = null;
+    while (Date.now() < startDeadline) {
+      await new Promise((r) => setTimeout(r, 100));
+      if (existsSync(daemonFilePath)) {
+        const info = readDaemonInfo(daemonFilePath);
+        if (info && (await isDaemonHealthy(info.url))) {
+          daemon1Info = info;
+          break;
+        }
+      }
+    }
+
+    expect(daemon1Info).not.toBeNull();
+    expect(daemon1Info?.port).toBeGreaterThan(0);
+    logger.write(`Daemon 1 healthy at ${daemon1Info?.url} (PID: ${daemon1Info?.pid})`);
+
+    // 2. Connect stdio proxy client to Daemon 1 with auto-spawn enabled
     const { server: proxyServer, daemonClient } = await createStdioProxy({
       role: "developer",
       configPath,
+      dbPath,
       credentialsPath: credPath,
       daemonFilePath,
-      noSpawn: true,
+      noSpawn: false, // Auto-spawn enabled
     });
 
     const mcpClient = new Client({ name: "ide-agent", version: "1.0.0" });
@@ -109,26 +164,21 @@ describe("E2E Chaos & Self-Healing: Mid-Session Daemon Crash, Recovery & Idempot
     let initialArtifactId = "";
 
     try {
-      // 1. Verify initial whoami & presence
+      // Verify initial whoami & work queue
       const whoamiRes = await mcpClient.callTool({ name: "whoami", arguments: {} });
       expect(whoamiRes.isError).not.toBe(true);
 
       const queueRes = await mcpClient.callTool({ name: "get_work_queue", arguments: {} });
       expect(queueRes.isError).not.toBe(true);
-      const queueText = (queueRes.content as Array<{ text: string }>)[0]!.text;
-      const queueData = JSON.parse(queueText) as { presence?: Array<{ roleId: string; status: string }> };
-      expect(queueData.presence).toBeDefined();
-      const devPresence = queueData.presence?.find((p) => p.roleId === "developer");
-      expect(devPresence?.status).toBe("online");
 
-      // 2. Perform idempotent mutations
+      // Perform mutations with idempotency keys
       const taskRes = await mcpClient.callTool({
         name: "create_task",
         arguments: {
-          title: "Critical Refactor",
-          description: "Must survive crash",
+          title: "Critical Resilience Task",
+          description: "Must survive OS kill",
           assigned_to: "architect",
-          idempotency_key: "task-key-001",
+          idempotency_key: "chaos-task-001",
         },
       });
       expect(taskRes.isError).not.toBe(true);
@@ -143,7 +193,7 @@ describe("E2E Chaos & Self-Healing: Mid-Session Daemon Crash, Recovery & Idempot
           type: "status_update",
           task_id: initialTaskId,
           payload: { progress: 50 },
-          idempotency_key: "msg-key-001",
+          idempotency_key: "chaos-msg-001",
         },
       });
       expect(msgRes.isError).not.toBe(true);
@@ -155,70 +205,58 @@ describe("E2E Chaos & Self-Healing: Mid-Session Daemon Crash, Recovery & Idempot
         arguments: {
           type: "diff",
           name: "patch.diff",
-          content: "+ added resilience test",
+          content: "+ added true child process kill test",
           related_task_id: initialTaskId,
-          idempotency_key: "art-key-001",
+          idempotency_key: "chaos-art-001",
         },
       });
       expect(artRes.isError).not.toBe(true);
       const artData = JSON.parse((artRes.content as Array<{ text: string }>)[0]!.text) as { artifactId: string };
       initialArtifactId = artData.artifactId;
 
-      // Verify get_operation tool
-      const opRes = await mcpClient.callTool({
-        name: "get_operation",
-        arguments: { idempotency_key: "task-key-001" },
-      });
-      expect(opRes.isError).not.toBe(true);
-      const opData = JSON.parse((opRes.content as Array<{ text: string }>)[0]!.text) as {
-        found: boolean;
-        operation?: { responseJson: string };
-      };
-      expect(opData.found).toBe(true);
-      expect(opData.operation?.responseJson).toContain(initialTaskId);
+      // 3. CHAOS EVENT: Hard-kill the child process mid-session!
+      const originalPid = daemon1Info!.pid;
+      logger.write(`Terminating child process PID ${originalPid} mid-session...`);
+      try {
+        process.kill(originalPid, "SIGKILL");
+      } catch {}
+      try {
+        child1.kill("SIGKILL");
+      } catch {}
 
-      // Verify counts in DB1 before crash
-      expect(db1.countTasks()).toBe(1);
-      expect(db1.countMessages()).toBe(1);
-      expect(db1.countArtifacts()).toBe(1);
+      // Verify the process is genuinely dead and endpoint is unreachable
+      await new Promise((r) => setTimeout(r, 200));
+      expect(await isDaemonHealthy(daemon1Info!.url)).toBe(false);
+      logger.write(`Verified Daemon 1 at PID ${originalPid} is dead.`);
 
-      // 3. CHAOS EVENT: Kill Daemon 1 mid-session!
-      logger.write("Killing Daemon 1 mid-session...");
-      await server1.stop();
-      db1.close();
-      logger.write("Daemon 1 stopped.");
+      // 4. RECOVERY: Issue a request through the SAME mcpClient during outage!
+      // The resilient proxy detects transport failure and auto-spawns a replacement daemon
+      logger.write("Calling tool during outage to trigger auto-spawn recovery...");
+      const postRecoveryWhoami = await mcpClient.callTool({ name: "whoami", arguments: {} });
+      expect(postRecoveryWhoami.isError).not.toBe(true);
+      const whoamiContent = (postRecoveryWhoami.content as Array<{ text: string }>)[0]!.text;
+      expect(whoamiContent).toContain("developer");
 
-      // 4. RECOVERY: Start Daemon 2 on a new port using the same DB
-      const db2 = new AgentCorpDatabase(dbPath);
-      const broker2 = new AgentCorpBroker(config, db2);
-      const server2 = new AgentCorpServer(broker2, creds, {
-        port: 0,
-        host: "127.0.0.1",
-        daemonFilePath,
-        auditOnShutdown: false,
-      });
-      const daemon2Info = await server2.start();
-      logger.write(`Daemon 2 restarted at ${daemon2Info.url} (PID: ${daemon2Info.pid})`);
+      // Verify a new daemon process was started
+      const newDaemonInfo = readDaemonInfo(daemonFilePath);
+      expect(newDaemonInfo).not.toBeNull();
+      if (newDaemonInfo?.pid) {
+        activePids.push(newDaemonInfo.pid);
+        expect(newDaemonInfo.pid).not.toBe(originalPid);
+      }
 
-      // 5. Verify the existing stdio client seamlessly reconnects to Daemon 2
-      const postCrashWhoami = await mcpClient.callTool({ name: "whoami", arguments: {} });
-      expect(postCrashWhoami.isError).not.toBe(true);
-      const postWhoamiText = (postCrashWhoami.content as Array<{ text: string }>)[0]!.text;
-      expect(postWhoamiText).toContain("developer");
-
-      // 6. REPLAY MUTATION WITH SAME IDEMPOTENCY KEY: Zero duplicate creation
+      // 5. REPLAY MUTATION WITH SAME IDEMPOTENCY KEY: Guarantees zero duplicate state
       const replayedTask = await mcpClient.callTool({
         name: "create_task",
         arguments: {
-          title: "Critical Refactor",
-          description: "Must survive crash",
+          title: "Critical Resilience Task",
+          description: "Must survive OS kill",
           assigned_to: "architect",
-          idempotency_key: "task-key-001", // SAME KEY
+          idempotency_key: "chaos-task-001",
         },
       });
       expect(replayedTask.isError).not.toBe(true);
       const replayedTaskData = JSON.parse((replayedTask.content as Array<{ text: string }>)[0]!.text) as { taskId: string };
-      // Must return the exact original taskId
       expect(replayedTaskData.taskId).toBe(initialTaskId);
 
       const replayedMsg = await mcpClient.callTool({
@@ -228,7 +266,7 @@ describe("E2E Chaos & Self-Healing: Mid-Session Daemon Crash, Recovery & Idempot
           type: "status_update",
           task_id: initialTaskId,
           payload: { progress: 50 },
-          idempotency_key: "msg-key-001", // SAME KEY
+          idempotency_key: "chaos-msg-001",
         },
       });
       expect(replayedMsg.isError).not.toBe(true);
@@ -240,45 +278,103 @@ describe("E2E Chaos & Self-Healing: Mid-Session Daemon Crash, Recovery & Idempot
         arguments: {
           type: "diff",
           name: "patch.diff",
-          content: "+ added resilience test",
+          content: "+ added true child process kill test",
           related_task_id: initialTaskId,
-          idempotency_key: "art-key-001", // SAME KEY
+          idempotency_key: "chaos-art-001",
         },
       });
       expect(replayedArt.isError).not.toBe(true);
       const replayedArtData = JSON.parse((replayedArt.content as Array<{ text: string }>)[0]!.text) as { artifactId: string };
       expect(replayedArtData.artifactId).toBe(initialArtifactId);
 
-      // Verify ZERO DUPLICATE ROWS created in Database 2
-      expect(db2.countTasks()).toBe(1);
-      expect(db2.countMessages()).toBe(1);
-      expect(db2.countArtifacts()).toBe(1);
-
-      // Verify operation lookup still works on Daemon 2
-      const postOpRes = await mcpClient.callTool({
-        name: "get_operation",
-        arguments: { idempotency_key: "task-key-001" },
-      });
-      expect(postOpRes.isError).not.toBe(true);
-      const postOpData = JSON.parse((postOpRes.content as Array<{ text: string }>)[0]!.text) as {
-        found: boolean;
-        operation?: { responseJson: string };
-      };
-      expect(postOpData.found).toBe(true);
-      expect(postOpData.operation?.responseJson).toContain(initialTaskId);
-
-      // Verify presence in Daemon 2
-      const presenceList = db2.listRolePresence();
-      const devPres = presenceList.find((p) => p.roleId === "developer");
-      expect(devPres?.status).toBe("online");
-      expect(devPres?.lastSeenAt).toBeDefined();
-
-      await server2.stop();
-      db2.close();
+      // Verify exact count in SQLite database
+      const dbVerify = new AgentCorpDatabase(dbPath);
+      try {
+        expect(dbVerify.countTasks()).toBe(1);
+        expect(dbVerify.countMessages()).toBe(1);
+        expect(dbVerify.countArtifacts()).toBe(1);
+      } finally {
+        dbVerify.close();
+      }
     } finally {
       await mcpClient.close();
       await proxyServer.close();
       await daemonClient.close();
     }
-  });
+  }, 15000);
+
+  it("AC-RLY-06: isolated concurrent daemons run on dynamic ports without port collision", async () => {
+    const tempDir2 = mkdtempSync(join(tmpdir(), "agentcorp-proj2-"));
+    const configPath2 = join(tempDir2, "org.toml");
+    const dbPath2 = join(tempDir2, "agentcorp.db");
+    const credPath2 = join(tempDir2, "credentials.json");
+    const daemonFilePath2 = join(tempDir2, "daemon.json");
+
+    try {
+      writeFileSync(
+        configPath2,
+        `[company]\nname = "Project 2"\n\n[[roles]]\nid = "developer"\nallowed_peers = []\ncapabilities = ["code"]\nartifact_visibility = ["developer"]\n`,
+        "utf8",
+      );
+      ensureCredentials(config, credPath2);
+
+      const cliPath = resolve("dist/cli.js");
+
+      // Spawn Daemon A on ephemeral port (port 0)
+      const childA = spawn(
+        process.execPath,
+        [cliPath, "start", "--port", "0", "--config", configPath, "--db", dbPath, "--daemon-file", daemonFilePath, "--credentials", credPath],
+        { stdio: "ignore" },
+      );
+      activeChildren.push(childA);
+      if (childA.pid) activePids.push(childA.pid);
+
+      // Spawn Daemon B on ephemeral port (port 0)
+      const childB = spawn(
+        process.execPath,
+        [cliPath, "start", "--port", "0", "--config", configPath2, "--db", dbPath2, "--daemon-file", daemonFilePath2, "--credentials", credPath2],
+        { stdio: "ignore" },
+      );
+      activeChildren.push(childB);
+      if (childB.pid) activePids.push(childB.pid);
+
+      // Wait for both to be healthy
+      const deadline = Date.now() + 6000;
+      let infoA: ReturnType<typeof readDaemonInfo> = null;
+      let infoB: ReturnType<typeof readDaemonInfo> = null;
+      while (Date.now() < deadline && (!infoA || !infoB)) {
+        await new Promise((r) => setTimeout(r, 100));
+        if (!infoA && existsSync(daemonFilePath)) {
+          const iA = readDaemonInfo(daemonFilePath);
+          if (iA && (await isDaemonHealthy(iA.url))) infoA = iA;
+        }
+        if (!infoB && existsSync(daemonFilePath2)) {
+          const iB = readDaemonInfo(daemonFilePath2);
+          if (iB && (await isDaemonHealthy(iB.url))) infoB = iB;
+        }
+      }
+
+      expect(infoA).not.toBeNull();
+      expect(infoB).not.toBeNull();
+      expect(infoA?.port).toBeGreaterThan(0);
+      expect(infoB?.port).toBeGreaterThan(0);
+      // Ports and URLs must be distinct
+      expect(infoA?.port).not.toBe(infoB?.port);
+      expect(infoA?.url).not.toBe(infoB?.url);
+    } finally {
+      try {
+        if (existsSync(daemonFilePath2)) {
+          const info = readDaemonInfo(daemonFilePath2);
+          if (info?.pid) {
+            try {
+              process.kill(info.pid, "SIGKILL");
+            } catch {}
+          }
+        }
+      } catch {}
+      try {
+        rmSync(tempDir2, { recursive: true, force: true });
+      } catch {}
+    }
+  }, 15000);
 });

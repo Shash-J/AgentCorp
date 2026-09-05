@@ -67,6 +67,41 @@ export class RotatingLogger {
   }
 }
 
+export function sanitizeBrokerEventForLog(evt: { type: string; timestamp?: string; data?: Record<string, unknown> }): Record<string, unknown> {
+  const meta: Record<string, unknown> = {
+    type: evt.type,
+    timestamp: evt.timestamp ?? new Date().toISOString(),
+  };
+  const data = evt.data;
+  if (!data || typeof data !== "object") return meta;
+
+  if (data.id) meta.id = data.id;
+  if (data.taskId) meta.taskId = data.taskId;
+  if (data.messageId) meta.messageId = data.messageId;
+  if (data.artifactId) meta.artifactId = data.artifactId;
+  if (data.fromRole) meta.fromRole = data.fromRole;
+  if (data.toRole) meta.toRole = data.toRole;
+  if (data.status) meta.status = data.status;
+  if (data.approvalId) meta.approvalId = data.approvalId;
+  if (data.requestedBy) meta.requestedBy = data.requestedBy;
+  if (data.assignedTo) meta.assignedTo = data.assignedTo;
+  if (data.title) meta.title = data.title;
+  if (data.action) meta.action = data.action;
+
+  // Redaction: Never log message payloads or artifact contents directly; only record byte sizes
+  if (data.payload !== undefined) {
+    try {
+      meta.payloadSizeBytes = Buffer.byteLength(JSON.stringify(data.payload), "utf8");
+    } catch {
+      meta.payloadSizeBytes = -1;
+    }
+  }
+  if (data.content !== undefined) {
+    meta.contentSizeBytes = typeof data.content === "string" ? Buffer.byteLength(data.content, "utf8") : -1;
+  }
+  return meta;
+}
+
 export function recordCrashDiagnostics(
   crashLogPath: string,
   error: unknown,

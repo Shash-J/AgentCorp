@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,18 +21,75 @@ export interface StdioAdapterOptions {
   daemonUrl?: string | undefined;
 }
 
+export const MUTATION_TOOLS = new Set([
+  "create_task",
+  "send_message",
+  "accept_handoff",
+  "create_artifact",
+  "update_task_status",
+]);
+
+export function isRetryableTransportError(err: unknown): boolean {
+  if (!err) return false;
+  const msg = String(err);
+  if (
+    msg.includes("fetch failed") ||
+    msg.includes("ECONNREFUSED") ||
+    msg.includes("ECONNRESET") ||
+    msg.includes("ETIMEDOUT") ||
+    msg.includes("ENOTFOUND") ||
+    msg.includes("EPIPE") ||
+    msg.includes("UND_ERR")
+  ) {
+    return true;
+  }
+  if (typeof err === "object" && err !== null) {
+    if (err instanceof Error && err.name === "TypeError" && err.message.includes("fetch")) return true;
+    const anyErr = err as Record<string, unknown>;
+    const code = anyErr.code ?? (anyErr.cause as Record<string, unknown> | undefined)?.code;
+    if (
+      typeof code === "string" &&
+      ["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "ENOTFOUND", "EPIPE"].includes(code)
+    ) {
+      return true;
+    }
+    const status = anyErr.status ?? (anyErr.cause as Record<string, unknown> | undefined)?.status;
+    if (typeof status === "number" && [502, 503, 504].includes(status)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function resolveDefaultPath(
+  options: { configPath?: string | undefined; dbPath?: string | undefined },
+  fileName: string,
+): string {
+  if (options.configPath) {
+    return resolve(dirname(resolve(options.configPath)), ".agentcorp", fileName);
+  }
+  if (options.dbPath) {
+    return resolve(dirname(resolve(options.dbPath)), fileName);
+  }
+  return resolve(".agentcorp", fileName);
+}
+
 function resolveCliPath(): string {
   try {
     const currentDir = dirname(fileURLToPath(import.meta.url));
     const candidateJs = resolve(currentDir, "cli.js");
     if (existsSync(candidateJs)) return candidateJs;
-    const candidateTs = resolve(currentDir, "cli.ts");
-    if (existsSync(candidateTs)) return candidateTs;
+    const rootDistJs = resolve(currentDir, "..", "dist", "cli.js");
+    if (existsSync(rootDistJs)) return rootDistJs;
   } catch {
     // Fallback if import.meta.url is unusual
   }
-  if (process.argv[1]) return resolve(process.argv[1]);
-  return resolve("dist/cli.js");
+  const rootDist = resolve("dist/cli.js");
+  if (existsSync(rootDist)) return rootDist;
+  if (process.argv[1] && existsSync(process.argv[1]) && process.argv[1].endsWith(".js")) {
+    return resolve(process.argv[1]);
+  }
+  return rootDist;
 }
 
 export async function isDaemonHealthy(url: string): Promise<boolean> {
@@ -46,10 +104,12 @@ export async function isDaemonHealthy(url: string): Promise<boolean> {
 export async function ensureDaemonRunning(options: {
   configPath?: string | undefined;
   dbPath?: string | undefined;
+  credentialsPath?: string | undefined;
   daemonFilePath?: string | undefined;
   noSpawn?: boolean | undefined;
+  port?: number | string | undefined;
 }): Promise<DaemonInfo> {
-  const daemonFilePath = options.daemonFilePath ?? ".agentcorp/daemon.json";
+  const daemonFilePath = options.daemonFilePath ?? resolveDefaultPath(options, "daemon.json");
   const existing = readDaemonInfo(daemonFilePath);
   if (existing && (await isDaemonHealthy(existing.url))) {
     return existing;
@@ -63,9 +123,11 @@ export async function ensureDaemonRunning(options: {
   }
 
   const cliPath = resolveCliPath();
-  const args = [cliPath, "start"];
+  const args = [cliPath, "start", "--port", options.port !== undefined ? String(options.port) : "0"];
   if (options.configPath) args.push("--config", resolve(options.configPath));
   if (options.dbPath) args.push("--db", resolve(options.dbPath));
+  if (options.daemonFilePath) args.push("--daemon-file", resolve(options.daemonFilePath));
+  if (options.credentialsPath) args.push("--credentials", resolve(options.credentialsPath));
 
   const child = spawn(process.execPath, args, {
     detached: true,
@@ -132,7 +194,7 @@ export class ResilientDaemonClient {
         }
       }
     } else if (!daemonUrl) {
-      const defaultDaemonPath = ".agentcorp/daemon.json";
+      const defaultDaemonPath = resolveDefaultPath(this.options, "daemon.json");
       if (existsSync(defaultDaemonPath)) {
         const info = readDaemonInfo(defaultDaemonPath);
         if (info && (await isDaemonHealthy(info.url))) {
@@ -145,6 +207,7 @@ export class ResilientDaemonClient {
       const info = await ensureDaemonRunning({
         configPath: this.options.configPath,
         dbPath: this.options.dbPath,
+        credentialsPath: this.options.credentialsPath,
         daemonFilePath: this.options.daemonFilePath,
         noSpawn: this.options.noSpawn,
       });
@@ -176,6 +239,9 @@ export class ResilientDaemonClient {
     try {
       return await fn(client);
     } catch (err: unknown) {
+      if (!isRetryableTransportError(err)) {
+        throw err;
+      }
       // Reconnection with bounded exponential backoff [100ms, 250ms, 500ms, 1000ms, 2000ms]
       const backoffs = [100, 250, 500, 1000, 2000];
       let lastErr = err;
@@ -186,6 +252,9 @@ export class ResilientDaemonClient {
           return await fn(client);
         } catch (retryErr: unknown) {
           lastErr = retryErr;
+          if (!isRetryableTransportError(retryErr)) {
+            throw retryErr;
+          }
         }
       }
       throw lastErr;
@@ -197,7 +266,15 @@ export class ResilientDaemonClient {
   }
 
   async callTool(params: { name: string; arguments?: Record<string, unknown> }) {
-    return this.executeWithRetry((c) => c.callTool(params));
+    let callParams = params;
+    if (MUTATION_TOOLS.has(params.name)) {
+      const args = { ...(params.arguments ?? {}) };
+      if (!args.idempotency_key) {
+        args.idempotency_key = `synthetic_${randomUUID()}`;
+      }
+      callParams = { ...params, arguments: args };
+    }
+    return this.executeWithRetry((c) => c.callTool(callParams));
   }
 
   async close(): Promise<void> {
@@ -218,7 +295,8 @@ export async function createStdioProxy(options: StdioAdapterOptions): Promise<{
   daemonClient: ResilientDaemonClient;
 }> {
   const config = loadOrgConfig(options.configPath ?? "org.toml");
-  const creds = ensureCredentials(config, options.credentialsPath ?? ".agentcorp/credentials.json");
+  const credPath = options.credentialsPath ?? resolveDefaultPath(options, "credentials.json");
+  const creds = ensureCredentials(config, credPath);
   const roleToken = creds.roleTokens[options.role];
   if (!roleToken) {
     throw new AgentCorpError("UNKNOWN_ROLE", `Role '${options.role}' not found in credentials`);
