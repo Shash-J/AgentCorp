@@ -76,6 +76,9 @@ Goal: deliver a reproducible, high-standard open-source developer preview releas
 - Curated npm package manifest (< 200 KB packed) retaining declarations, source maps, console assets, and docs while excluding binary images and internal design specs
 - Open source community templates (Contributor Covenant Code of Conduct, GitHub Issue & PR templates)
 - Complete maintainer release guide (`docs/RELEASING.md`) separating automated checks from maintainer-owned npm publishing
+- Beginner setup and first-workflow guide plus a public dogfooding report
+- Strict typechecking for production and test sources with a production-only build configuration
+- Package-boundary regression assertions for the npm tarball
 
 ## Milestone 3 — adapters and interoperability (next)
 

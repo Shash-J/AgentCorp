@@ -192,11 +192,20 @@ export class AgentCorpDatabase {
 
   constructor(path = ".agentcorp/agentcorp.db", options: DatabaseOptions = {}) {
     if (path !== ":memory:") mkdirSync(dirname(resolve(path)), { recursive: true });
-    this.db = new DatabaseSync(path);
-    this.db.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
     this.defaultPageSize = options.defaultPageSize ?? DEFAULT_PAGE_LIMIT;
     this.maxPageSize = options.maxPageSize ?? MAX_PAGE_LIMIT;
-    this.migrate();
+    this.db = new DatabaseSync(path);
+    try {
+      // Install the busy handler before journal-mode negotiation or migrations;
+      // either operation can require a lock when another process opens the same DB.
+      this.db.exec("PRAGMA busy_timeout = 5000;");
+      this.db.exec("PRAGMA foreign_keys = ON;");
+      this.db.exec("PRAGMA journal_mode = WAL;");
+      this.migrate();
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
   }
 
   resolveLimit(limit?: number): number {

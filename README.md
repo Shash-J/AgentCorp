@@ -42,6 +42,9 @@ not require an experimental flag from 22.13 onward.
 
 ## Quick start
 
+New to Node.js, terminals, or MCP? Follow the complete
+[beginner setup guide](./docs/getting-started.md). The short path is below.
+
 Until the first npm release, run the CLI from this repository:
 
 ```sh
@@ -185,10 +188,10 @@ AgentCorp enforces bounded memory and disk usage to protect long-running daemons
 - **History pruning and WAL compaction**:
   ```sh
   # Dry-run simulate pruning resolved tasks and messages older than 30 days
-  agentcorp prune --older-than 30 --dry-run
+  agentcorp prune --older-than 30
 
   # Execute pruning and compact SQLite database
-  agentcorp prune --older-than 30 --compact
+  agentcorp prune --older-than 30 --execute --compact
 
   # Manually checkpoint WAL and vacuum freed pages
   agentcorp compact
@@ -228,9 +231,11 @@ npm run build
 npm pack --dry-run
 ```
 
-The main design document is [AgentCorp_Design_Spec.md](./AgentCorp_Design_Spec.md).
+The main design document is [docs/design-spec.md](./docs/design-spec.md).
 The delivery sequence and design gaps are tracked in
 [docs/ROADMAP.md](./docs/ROADMAP.md).
+Maintainers should follow the [release guide](./docs/RELEASING.md); do not
+publish directly from an unverified working tree.
 
 ## Security model
 

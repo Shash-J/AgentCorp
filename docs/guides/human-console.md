@@ -115,7 +115,7 @@ Run the console command to view system status, task counts, and pending approval
 agentcorp console
 ```
 
-Output:
+Example output (the automatically selected port varies):
 ```text
 ┌─────────────────────────────────────────────────────────────┐
 │  AGENTCORP  ::  Human Approval & Coordination Console       │

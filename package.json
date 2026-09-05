@@ -29,6 +29,7 @@
     "dist",
     "docs",
     "!docs/images/**",
+    "!docs/design-spec.md",
     "examples",
     "README.md",
     "CONTRIBUTING.md",
@@ -37,7 +38,7 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node -e \"require('node:fs').cpSync('src/console', 'dist/console', { recursive: true, force: true })\"",
+    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').cpSync('src/console', 'dist/console', { recursive: true, force: true })\"",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

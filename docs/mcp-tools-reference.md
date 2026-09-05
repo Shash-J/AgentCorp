@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-AgentCorp exposes 14 coordination tools over the Model Context Protocol (MCP). Every tool call executes within the authenticated role context of the connection, meaning caller identity (`fromRole`, `producedBy`, `callerRole`) is enforced server-side and cannot be spoofed.
+AgentCorp exposes 15 coordination tools over the Model Context Protocol (MCP). Every tool call executes within the authenticated role context of the connection, meaning caller identity (`fromRole`, `producedBy`, `callerRole`) is enforced server-side and cannot be spoofed.
 
 ---
 
@@ -233,4 +233,3 @@ Look up a previously executed idempotent operation result by its idempotency key
 > All mutation tools (`create_task`, `send_message`, `accept_handoff`, `create_artifact`, `update_task_status`) accept an optional `idempotency_key` string.
 > Replays with identical keys and request payloads return cached results atomically.
 > Replaying a key with a mismatched operation or mismatched payload raises `IDEMPOTENCY_CONFLICT`.
-

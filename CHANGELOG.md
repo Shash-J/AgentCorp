@@ -22,6 +22,8 @@ Initial public developer preview release of AgentCorp: a local-first coordinatio
 - **Working Directory Isolation**: Automatic path resolution allowing MCP host processes to run from arbitrary working directories while automatically deriving project-scoped database, credentials, logs, and daemon control files from `org.toml`.
 - **Mutation Idempotency (`idempotency_key`)**: Role-scoped composite primary key `(role_id, key)` with SHA-256 operation and payload hash validation, rejecting cross-role key collisions and stale mismatches.
 - **Re-Entrant Atomic Transactions**: SQLite transaction management with depth tracking guaranteeing atomic commits and clean rollbacks for business mutations and idempotency records.
+- **Concurrent Database Startup**: Installs SQLite's busy handler before WAL negotiation and migrations so simultaneous worker connections wait for initialization locks instead of failing intermittently.
+- **Collision-Free Daemon Default**: Background startup now selects an available loopback port by default and records actionable startup failures in the bounded daemon log.
 
 ### Persistence, Migrations & Bounded Storage
 - **Transactional SQLite Persistence**: Built on Node.js 22 built-in `node:sqlite` with WAL journal mode, busy timeouts, and versioned schema migrations (Versions 1 through 7).
@@ -35,6 +37,12 @@ Initial public developer preview release of AgentCorp: a local-first coordinatio
 - **Role Presence & Activity Freshness**: Telemetry tracking role liveness, last seen timestamps, and activity freshness (`fresh`, `idle`, `stale`).
 - **Diagnostic Health Check (`agentcorp doctor`)**: Comprehensive operational diagnostics inspecting configuration, database schema, credentials, daemon health, and crash logs.
 - **Structured Log Rotation & Sanitization**: Bounded rotating daemon logs (`.agentcorp/daemon.log`, 5 MB max with 3 backups) with payload redaction protecting conversation confidentiality, alongside fatal crash diagnostics (`.agentcorp/crash.log`).
+
+### Release Engineering & Documentation
+- **Strict Test Typechecking**: The default TypeScript check now covers both production source and tests, with a separate production-only build configuration.
+- **Package Boundary Regression Test**: The clean-install smoke suite asserts that source, tests, runtime state, internal design notes, and binary documentation assets cannot enter the npm tarball.
+- **Beginner and Maintainer Guides**: Added end-to-end first-workflow, troubleshooting, GitHub setup, npm preview publication, verification, and recovery instructions.
+- **Dogfooding Findings**: Documented the observed Codex-Gemini collaboration strengths, host-lifecycle friction, and a bounded adapter architecture for future autonomous invocation.
 
 ### Audit Integrity & Truncation Semantics
 - **Explicit Audit Semantics**: Formatted Markdown and JSON audit exports (`coord/audit.md`, `coord/audit.json`) distinguishing row-limit truncation (`rowLimitTruncated`) from field-level clipping (`fieldClippingActive`).

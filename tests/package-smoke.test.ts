@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -8,6 +8,7 @@ describe("Package Release Smoke Test: Clean Outside-Checkout Installation", () =
   let tempWorkDir: string;
   let cleanClientDir: string;
   let tarballPath: string;
+  let packageFiles: string[];
 
   const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
   const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
@@ -18,14 +19,17 @@ describe("Package Release Smoke Test: Clean Outside-Checkout Installation", () =
     cleanClientDir = mkdtempSync(join(tmpdir(), "agentcorp-smoke-client-"));
 
     // 2. Build and pack the project into tempWorkDir
-    execSync(`${npmCmd} pack --ignore-scripts --pack-destination "${tempWorkDir}"`, {
+    const packOutput = execSync(`${npmCmd} pack --json --ignore-scripts --pack-destination "${tempWorkDir}"`, {
       cwd: resolve("."),
-      stdio: "pipe",
+      encoding: "utf8",
     });
-
-    const packedFiles = readdirSync(tempWorkDir).filter((f) => f.endsWith(".tgz"));
-    expect(packedFiles.length).toBe(1);
-    tarballPath = join(tempWorkDir, packedFiles[0]!);
+    const packed = JSON.parse(packOutput) as Array<{
+      filename: string;
+      files: Array<{ path: string }>;
+    }>;
+    expect(packed.length).toBe(1);
+    tarballPath = join(tempWorkDir, packed[0]!.filename);
+    packageFiles = packed[0]!.files.map((file) => file.path.replaceAll("\\", "/"));
   }, 60000);
 
   afterAll(() => {
@@ -38,6 +42,26 @@ describe("Package Release Smoke Test: Clean Outside-Checkout Installation", () =
       }
     } catch {
       // Ignored cleanup errors
+    }
+  });
+
+  it("ships the public runtime without internal or generated project state", () => {
+    expect(packageFiles).toContain("dist/cli.js");
+    expect(packageFiles).toContain("dist/index.d.ts");
+    expect(packageFiles).toContain("docs/getting-started.md");
+    expect(packageFiles).toContain("README.md");
+
+    const forbiddenPaths = [
+      ".agentcorp/",
+      "coord/",
+      "docs/design-spec.md",
+      "docs/images/",
+      "scratch/",
+      "src/",
+      "tests/",
+    ];
+    for (const forbidden of forbiddenPaths) {
+      expect(packageFiles.some((path) => path === forbidden || path.startsWith(forbidden))).toBe(false);
     }
   });
 

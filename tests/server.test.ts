@@ -152,7 +152,7 @@ describe("AgentCorpServer", () => {
       // 2. Developer inbox is empty (held for approval)
       const hidden = await devClient.callTool({ name: "get_inbox", arguments: {} });
       const hiddenInbox = JSON.parse(
-        hidden.content[0]!.type === "text" ? hidden.content[0].text : "null",
+        hidden.content[0]?.type === "text" ? hidden.content[0].text : "null",
       );
       expect(hiddenInbox).toEqual([]);
 
@@ -179,7 +179,7 @@ describe("AgentCorpServer", () => {
       // 5. Developer inbox now contains the delivered message!
       const delivered = await devClient.callTool({ name: "get_inbox", arguments: {} });
       const deliveredInbox = JSON.parse(
-        delivered.content[0]!.type === "text" ? delivered.content[0].text : "null",
+        delivered.content[0]?.type === "text" ? delivered.content[0].text : "null",
       ) as Array<{ fromRole: string; status: string }>;
       expect(deliveredInbox).toMatchObject([{ fromRole: "architect", status: "delivered" }]);
     } finally {

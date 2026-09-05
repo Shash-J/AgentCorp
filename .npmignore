@@ -1,7 +1,0 @@
-docs/images/
-*.log
-.agentcorp/
-tests/
-scratch/
-coord/
-AgentCorp_Design_Spec.md

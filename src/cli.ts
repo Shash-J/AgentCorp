@@ -347,7 +347,7 @@ program
 program
   .command("start")
   .description("Start the central local broker daemon")
-  .option("--port <number>", "HTTP port to listen on", "54321")
+  .option("--port <number>", "HTTP port to listen on; 0 selects an available port", "0")
   .option("--host <string>", "Host address to bind to", "127.0.0.1")
   .option("--daemon", "Run detached in the background")
   .option("--daemon-file <path>", "path to daemon.json control file")
@@ -407,7 +407,8 @@ program
       }
       throw new AgentCorpError(
         "DAEMON_SPAWN_FAILED",
-        `Background daemon process ${child.pid ?? "unknown"} did not become healthy within 6 seconds`,
+        `Background daemon process ${child.pid ?? "unknown"} did not become healthy within 6 seconds. ` +
+          "Inspect .agentcorp/daemon.log or run 'agentcorp start' without --daemon to see the startup error.",
       );
     }
 
@@ -431,7 +432,14 @@ program
       daemonLogger.write(`[event:${evt.type}] ${JSON.stringify(sanitized)}`);
     });
 
-    const info = await server.start();
+    let info: DaemonInfo;
+    try {
+      info = await server.start();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      daemonLogger.write(`AgentCorp daemon failed to start (PID: ${process.pid}): ${message}`);
+      throw error;
+    }
     daemonLogger.write(`AgentCorp daemon listening at ${info.url}`);
     console.error(`AgentCorp Daemon started at ${info.url} (PID: ${info.pid})`);
     output({

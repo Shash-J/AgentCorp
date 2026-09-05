@@ -5,8 +5,8 @@ Thank you for helping build vendor-neutral agent coordination infrastructure.
 ## Local setup
 
 1. Install Node.js 22.13 or newer.
-2. Run `npm install`.
-3. Run `npm run check && npm test` before opening a pull request.
+2. Run `npm ci` for a lockfile-reproducible dependency install.
+3. Run `npm run check`, `npm run build`, and `npm test` before opening a pull request.
 
 Keep changes focused and add tests for new behavior. Protocol or persistence
 changes should update the design spec or an architecture note. Security

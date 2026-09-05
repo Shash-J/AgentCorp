@@ -10,6 +10,7 @@ All commands accept the following global flags:
 
 * `--config <path>`: Path to organization configuration file (default: `org.toml`).
 * `--db <path>`: Path to SQLite broker database (default: `.agentcorp/agentcorp.db`).
+* `--credentials <path>`: Optional credentials-file override. By default, AgentCorp uses `.agentcorp/credentials.json` beside the selected configuration.
 
 ---
 
@@ -28,9 +29,10 @@ Validates `org.toml` syntax, role graphs, peer connectivity, and policy schemas.
 Starts the central broker daemon hosting Streamable HTTP MCP (`/mcp`), Admin REST API (`/api/*`), and real-time SSE (`/api/events`).
 
 * **Options**:
-  * `--port <number>`: HTTP port to listen on (default: `54321`).
+  * `--port <number>`: HTTP port to listen on. The default `0` asks the operating system for an available local port and records the selection in `.agentcorp/daemon.json`.
   * `--host <string>`: Host address to bind to (default: `127.0.0.1`).
   * `--daemon`: Runs detached in the background.
+  * `--daemon-file <path>`: Overrides the daemon control-file location.
 
 ### `agentcorp stop`
 Sends a graceful termination signal (`SIGTERM`) to the running background daemon.
@@ -106,7 +108,7 @@ Runs a role-bound stdio MCP server for agent hosts that only spawn local command
 ## 5. Audit & Compliance
 
 ### `agentcorp audit export`
-Generates human-readable Markdown (`coord/audit.md`) and structured JSON (`coord/audit.json`) snapshots of the entire broker state for version-controlled traceability.
+Generates human-readable Markdown (`coord/audit.md`) and structured JSON (`coord/audit.json`) snapshots of broker state for operational review. These files are ignored by default because they can contain project conversation metadata; store or share them only after review.
 
 * **Options**:
   * `--out <dir>`: Output directory (default: `coord`).
@@ -122,7 +124,9 @@ Prunes terminal, resolved history (completed/failed/cancelled tasks, associated 
 
 * **Options**:
   * `--older-than <days>`: Age threshold in days for terminal records to prune (default: `30`).
-  * `--dry-run`: Reports the count of eligible records without modifying or deleting database rows.
+  * With no execution flag, reports the count of eligible records without modifying or deleting database rows (safe default).
+  * `--execute`: Performs the deletion described by the preview.
+  * `--delete-artifacts`: Deletes associated artifacts instead of detaching them.
   * `--compact`: Automatically runs a SQLite WAL checkpoint (`TRUNCATE`) and `VACUUM` after successful pruning.
 
 ### `agentcorp compact`

@@ -554,7 +554,6 @@ describe("bounding, pagination, and maintenance", () => {
           name: "spec1.md",
           content: "test content 1",
           contentHash: "hash1",
-          contentUri: null,
           visibleToRoles: ["architect", "developer"],
           createdAt: oldTimestamp,
         });
@@ -590,7 +589,6 @@ describe("bounding, pagination, and maintenance", () => {
           name: "spec2.md",
           content: "test content 2",
           contentHash: "hash2",
-          contentUri: null,
           visibleToRoles: ["architect", "developer"],
           createdAt: oldTimestamp,
         });
@@ -742,7 +740,6 @@ describe("bounding, pagination, and maintenance", () => {
             name: `hidden_${i}.md`,
             content: "hidden",
             contentHash: `hash_h_${i}`,
-            contentUri: null,
             visibleToRoles: ["auditor"],
             createdAt: `2026-09-01T00:00:0${i}Z`,
           });
@@ -757,7 +754,6 @@ describe("bounding, pagination, and maintenance", () => {
             name: `visible_${i}.ts`,
             content: "visible",
             contentHash: `hash_v_${i}`,
-            contentUri: null,
             visibleToRoles: ["developer"],
             createdAt: `2026-09-01T00:00:0${i}Z`,
           });
@@ -1177,9 +1173,10 @@ allowed_peers = ["architect"]
 artifact_visibility = "all"
 `;
       const config = parseOrgConfig(validToml);
+      const limits = config.limits!;
       const db = new AgentCorpDatabase(":memory:", {
-        defaultPageSize: config.limits.default_page_size,
-        maxPageSize: config.limits.max_page_size,
+        defaultPageSize: limits.default_page_size,
+        maxPageSize: limits.max_page_size,
       });
       const broker = new AgentCorpBroker(config, db);
 
@@ -1488,9 +1485,12 @@ artifact_visibility = "all"
         db.insertTask({
           taskId: "task_audit_budget",
           title: "Audit Budget Test",
+          description: null,
           createdBy: "architect",
           assignedTo: "developer",
           status: "in_progress",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
         });
 
         // Small message (under 50 bytes)

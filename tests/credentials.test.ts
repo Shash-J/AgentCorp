@@ -63,11 +63,11 @@ describe("credentials", () => {
   it("correctly resolves caller identity from tokens", () => {
     const creds = ensureCredentials(testConfig, credPath);
     expect(resolveCallerFromToken(creds.adminToken, creds)).toEqual({ type: "admin" });
-    expect(resolveCallerFromToken(creds.roleTokens.architect, creds)).toEqual({
+    expect(resolveCallerFromToken(creds.roleTokens.architect!, creds)).toEqual({
       type: "role",
       roleId: "architect",
     });
-    expect(resolveCallerFromToken(creds.roleTokens.developer, creds)).toEqual({
+    expect(resolveCallerFromToken(creds.roleTokens.developer!, creds)).toEqual({
       type: "role",
       roleId: "developer",
     });

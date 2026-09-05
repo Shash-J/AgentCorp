@@ -85,12 +85,12 @@ describe("AgentCorp MCP server", () => {
         },
       });
       const task = JSON.parse(
-        created.content[0]!.type === "text" ? created.content[0].text : "null",
+        created.content[0]?.type === "text" ? created.content[0].text : "null",
       ) as { taskId: string; status: string };
       expect(task.status).toBe("proposed");
 
       const hiddenTasks = await developerClient.callTool({ name: "list_tasks", arguments: {} });
-      expect(JSON.parse(hiddenTasks.content[0]!.type === "text" ? hiddenTasks.content[0].text : "null"))
+      expect(JSON.parse(hiddenTasks.content[0]?.type === "text" ? hiddenTasks.content[0].text : "null"))
         .toEqual([]);
 
       const sent = await architectClient.callTool({
@@ -105,7 +105,7 @@ describe("AgentCorp MCP server", () => {
       expect(sent.isError).not.toBe(true);
 
       const hidden = await developerClient.callTool({ name: "get_inbox", arguments: {} });
-      expect(JSON.parse(hidden.content[0]!.type === "text" ? hidden.content[0].text : "null"))
+      expect(JSON.parse(hidden.content[0]?.type === "text" ? hidden.content[0].text : "null"))
         .toEqual([]);
 
       const [approval] = broker.listPendingApprovals();
@@ -113,13 +113,13 @@ describe("AgentCorp MCP server", () => {
 
       const delivered = await developerClient.callTool({ name: "get_inbox", arguments: {} });
       const inbox = JSON.parse(
-        delivered.content[0]!.type === "text" ? delivered.content[0].text : "null",
+        delivered.content[0]?.type === "text" ? delivered.content[0].text : "null",
       ) as Array<{ messageId: string; fromRole: string; status: string }>;
       expect(inbox).toMatchObject([{ fromRole: "architect", status: "delivered" }]);
 
       const work = await developerClient.callTool({ name: "get_work_queue", arguments: {} });
       const queue = JSON.parse(
-        work.content[0]!.type === "text" ? work.content[0].text : "null",
+        work.content[0]?.type === "text" ? work.content[0].text : "null",
       ) as { nextActions: Array<{ kind: string; messageId: string; taskId: string }> };
       expect(queue.nextActions[0]).toMatchObject({
         kind: "accept_handoff",
@@ -132,7 +132,7 @@ describe("AgentCorp MCP server", () => {
         arguments: { message_id: inbox[0]!.messageId },
       });
       const acceptance = JSON.parse(
-        accepted.content[0]!.type === "text" ? accepted.content[0].text : "null",
+        accepted.content[0]?.type === "text" ? accepted.content[0].text : "null",
       ) as { message: { status: string }; task: { status: string }; pendingApproval: boolean };
       expect(acceptance).toMatchObject({
         message: { status: "acknowledged" },

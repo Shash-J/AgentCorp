@@ -13,19 +13,18 @@ const TEST_ROOT = resolve(".agentcorp-test-r2");
 const testConfig: OrgConfig = {
   company: {
     name: "Reliability R2 Test Corp",
-    mission: "Adversarial reliability verification",
   },
   roles: [
     {
       id: "developer",
-      title: "Software Engineer",
+      interface: "mcp",
       capabilities: ["code", "test"],
       allowed_peers: ["architect"],
       artifact_visibility: ["developer", "architect"],
     },
     {
       id: "architect",
-      title: "Systems Architect",
+      interface: "mcp",
       capabilities: ["design", "review"],
       allowed_peers: ["developer"],
       artifact_visibility: ["developer", "architect"],

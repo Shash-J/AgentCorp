@@ -12,19 +12,18 @@ const TEST_ROOT = resolve(".agentcorp-test-r3");
 const testConfig: OrgConfig = {
   company: {
     name: "Reliability R3 Test Corp",
-    mission: "Adversarial reliability verification round 3",
   },
   roles: [
     {
       id: "developer",
-      title: "Software Engineer",
+      interface: "mcp",
       capabilities: ["code", "test"],
       allowed_peers: ["architect"],
       artifact_visibility: ["developer", "architect"],
     },
     {
       id: "architect",
-      title: "Systems Architect",
+      interface: "mcp",
       capabilities: ["design", "review"],
       allowed_peers: ["developer"],
       artifact_visibility: ["developer", "architect"],
@@ -144,7 +143,7 @@ artifact_visibility = ["developer", "architect"]
 
         const whoamiRes = await client.callTool({ name: "whoami", arguments: {} });
         expect(whoamiRes.isError).toBeFalsy();
-        const text = whoamiRes.content[0]!.type === "text" ? whoamiRes.content[0].text : "";
+        const text = whoamiRes.content[0]?.type === "text" ? whoamiRes.content[0].text : "";
         expect(text).toContain("Isolated Project Corp");
         expect(text).toContain("developer");
       } finally {

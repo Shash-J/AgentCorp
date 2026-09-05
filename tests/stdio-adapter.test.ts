@@ -92,7 +92,7 @@ describe("stdio-adapter", () => {
 
       const whoamiRes = await client.callTool({ name: "whoami", arguments: {} });
       expect(whoamiRes.isError).not.toBe(true);
-      const text = whoamiRes.content[0]!.type === "text" ? whoamiRes.content[0].text : "";
+      const text = whoamiRes.content[0]?.type === "text" ? whoamiRes.content[0].text : "";
       expect(text).toContain("Adapter Test Corp");
       expect(text).toContain("architect");
     } finally {

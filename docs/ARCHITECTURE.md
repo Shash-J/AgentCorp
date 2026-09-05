@@ -28,7 +28,7 @@ AgentCorp follows a **single-writer local daemon** model designed to bridge hete
                │ Streamable HTTP               │ Streamable HTTP
                │ (Bearer <roleToken>)          │ (Bearer <roleToken>)
 ┌──────────────▼───────────────────────────────▼──────────────┐
-│            AgentCorp Central Daemon (localhost:54321)        │
+│       AgentCorp Central Daemon (localhost, dynamic port)      │
 │                                                             │
 │  ┌──────────────────┐  ┌────────────────┐  ┌─────────────┐  │
 │  │ Streamable HTTP  │  │ Admin REST API │  │ SSE Stream  │  │

@@ -6,6 +6,10 @@ Welcome to the official AgentCorp documentation. AgentCorp is an open-source, lo
 
 ## Documentation Navigation
 
+### Start Here
+
+* **[Beginner Setup & First Workflow](getting-started.md)**: Install AgentCorp, configure two agents, approve a handoff, and troubleshoot the connection without assuming prior MCP experience.
+
 ### 1. Architecture & Design
 * **[Architecture Blueprint](ARCHITECTURE.md)**: Single-writer local daemon topology, Streamable HTTP MCP transport, role-bound stdio proxy adapters, transactional SQLite persistence, deterministic policy engine, and Server-Sent Events (SSE).
 * **[Build Roadmap](ROADMAP.md)**: Milestones, completed phases, and upcoming capabilities.
@@ -17,9 +21,11 @@ Welcome to the official AgentCorp documentation. AgentCorp is an open-source, lo
 * **[Human Oversight Console Guide](guides/human-console.md)**: Operating the terminal-native interactive review loop (`agentcorp review`) and the dark glassmorphic web dashboard (`agentcorp console --browser`).
 
 ### 3. Core References
-* **[MCP Tools Reference](mcp-tools-reference.md)**: Exhaustive reference for all 14 MCP tools exposed to agents, including the prioritized `get_work_queue` view and idempotent `accept_handoff` operation.
+* **[MCP Tools Reference](mcp-tools-reference.md)**: Exhaustive reference for all 15 MCP tools exposed to agents, including the prioritized `get_work_queue` view and idempotent `accept_handoff` operation.
 * **[CLI Reference](cli-reference.md)**: Complete command-line interface manual (`init`, `validate`, `start`, `stop`, `status`, `console`, `review`, `approvals`, `policies`, `audit`, `mcp`).
 * **[Policy & Safety Guide](policy-guide.md)**: Authoring safety rules, priority cascades, subset risk tag matching, and approval enforcement.
+* **[Release Guide](RELEASING.md)**: Prepare GitHub and npm, publish a preview safely, verify it, and recover from release mistakes.
+* **[Dogfooding Report](dogfooding-report.md)**: Findings from using AgentCorp itself for Codex-Gemini collaboration and the proposed direction for agent invocation.
 
 ---
 
