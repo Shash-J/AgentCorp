@@ -117,7 +117,7 @@ export class AgentCorpServer {
   readonly database: AgentCorpDatabase;
   readonly config: OrgConfig;
   readonly credentials: CredentialsFile;
-  readonly daemonFilePath: string;
+  readonly daemonFilePath: string | null;
   readonly maxBodySizeBytes: number;
   private server: Server | null = null;
   private readonly roleHandlers = new Map<string, ReturnType<typeof createMcpHandler>>();
@@ -138,11 +138,13 @@ export class AgentCorpServer {
     this.database = broker.database;
     this.config = broker.config;
     this.credentials = credentials ?? ensureCredentials(this.config);
-    this.daemonFilePath = resolve(options.daemonFilePath ?? ".agentcorp/daemon.json");
-    this.auditOnShutdown = options.auditOnShutdown ?? true;
-    this.maxBodySizeBytes = options.maxBodySizeBytes ?? DEFAULT_MAX_BODY_SIZE_BYTES;
     if (options.port !== undefined) this.port = options.port;
     if (options.host !== undefined) this.host = options.host;
+    this.daemonFilePath = options.daemonFilePath !== undefined
+      ? (options.daemonFilePath ? resolve(options.daemonFilePath) : null)
+      : (this.port === 0 ? null : resolve(".agentcorp/daemon.json"));
+    this.auditOnShutdown = options.auditOnShutdown ?? true;
+    this.maxBodySizeBytes = options.maxBodySizeBytes ?? DEFAULT_MAX_BODY_SIZE_BYTES;
     this.broker.on("event", this.eventListener);
   }
 
@@ -209,8 +211,10 @@ export class AgentCorpServer {
       startedAt: this.startedAt,
     };
 
-    mkdirSync(dirname(this.daemonFilePath), { recursive: true });
-    writeFileSync(this.daemonFilePath, JSON.stringify(daemonInfo, null, 2), "utf8");
+    if (this.daemonFilePath) {
+      mkdirSync(dirname(this.daemonFilePath), { recursive: true });
+      writeFileSync(this.daemonFilePath, JSON.stringify(daemonInfo, null, 2), "utf8");
+    }
 
     return daemonInfo;
   }
@@ -255,7 +259,7 @@ export class AgentCorpServer {
       this.server = null;
     }
 
-    if (existsSync(this.daemonFilePath)) {
+    if (this.daemonFilePath && existsSync(this.daemonFilePath)) {
       try {
         unlinkSync(this.daemonFilePath);
       } catch {

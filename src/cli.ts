@@ -117,6 +117,41 @@ async function refreshDaemonInfo(
   }
 }
 
+async function resolveDaemonInfo(
+  explicitUrl?: string,
+): Promise<{ info: DaemonInfo; health: DaemonHealth; controlFileRepaired: boolean } | null> {
+  const recorded = readDaemonInfo();
+  if (recorded) {
+    const refreshed = await refreshDaemonInfo(recorded);
+    if (refreshed) return refreshed;
+  }
+  const candidateUrl = explicitUrl ?? "http://127.0.0.1:54321";
+  try {
+    const res = await fetch(`${candidateUrl}/health`, { signal: AbortSignal.timeout(1500) });
+    if (!res.ok) return null;
+    const health = (await res.json()) as DaemonHealth;
+    if (health.status !== "ok" || !Number.isInteger(health.pid) || !health.startedAt) return null;
+    const parsed = new URL(candidateUrl);
+    const info: DaemonInfo = {
+      pid: health.pid,
+      port: Number(parsed.port || 54321),
+      host: parsed.hostname,
+      url: candidateUrl,
+      startedAt: health.startedAt,
+    };
+    let controlFileRepaired = false;
+    try {
+      writeFileSync(resolve(".agentcorp/daemon.json"), JSON.stringify(info, null, 2), "utf8");
+      controlFileRepaired = true;
+    } catch {
+      // Best effort
+    }
+    return { info, health, controlFileRepaired };
+  } catch {
+    return null;
+  }
+}
+
 function openBroker(options: GlobalOptions): { broker: AgentCorpBroker; db: AgentCorpDatabase } {
   const config = loadOrgConfig(options.config);
   const db = new AgentCorpDatabase(options.db);
@@ -124,8 +159,8 @@ function openBroker(options: GlobalOptions): { broker: AgentCorpBroker; db: Agen
 }
 
 async function getAdminClient(options: GlobalOptions) {
-  const daemonInfo = readDaemonInfo();
-  if (daemonInfo && (await isDaemonHealthy(daemonInfo.url))) {
+  const live = await resolveDaemonInfo();
+  if (live) {
     const creds = loadCredentials();
     const adminToken = creds?.adminToken;
     if (adminToken) {
@@ -136,10 +171,10 @@ async function getAdminClient(options: GlobalOptions) {
       return {
         isDaemon: true,
         listApprovals: async () =>
-          (await (await fetch(`${daemonInfo.url}/api/approvals`, { headers })).json()) as PendingApproval[],
+          (await (await fetch(`${live.info.url}/api/approvals`, { headers })).json()) as PendingApproval[],
         approve: async (id: string, note?: string, payload?: unknown) =>
           await (
-            await fetch(`${daemonInfo.url}/api/approvals/${id}/approve`, {
+            await fetch(`${live.info.url}/api/approvals/${id}/approve`, {
               method: "POST",
               headers,
               body: JSON.stringify({ note, payload }),
@@ -147,17 +182,17 @@ async function getAdminClient(options: GlobalOptions) {
           ).json(),
         reject: async (id: string, note?: string) =>
           await (
-            await fetch(`${daemonInfo.url}/api/approvals/${id}/reject`, {
+            await fetch(`${live.info.url}/api/approvals/${id}/reject`, {
               method: "POST",
               headers,
               body: JSON.stringify({ note }),
             })
           ).json(),
         listPolicies: async () =>
-          (await (await fetch(`${daemonInfo.url}/api/policies`, { headers })).json()) as PolicyRule[],
+          (await (await fetch(`${live.info.url}/api/policies`, { headers })).json()) as PolicyRule[],
         savePolicy: async (rule: unknown) =>
           await (
-            await fetch(`${daemonInfo.url}/api/policies`, {
+            await fetch(`${live.info.url}/api/policies`, {
               method: "POST",
               headers,
               body: JSON.stringify(rule),
@@ -165,14 +200,14 @@ async function getAdminClient(options: GlobalOptions) {
           ).json(),
         setPolicyEnabled: async (id: string, enabled: boolean) =>
           await (
-            await fetch(`${daemonInfo.url}/api/policies/${id}/${enabled ? "enable" : "disable"}`, {
+            await fetch(`${live.info.url}/api/policies/${id}/${enabled ? "enable" : "disable"}`, {
               method: "POST",
               headers,
             })
           ).json(),
         prune: async (olderThanDays: number, dryRun?: boolean) =>
           await (
-            await fetch(`${daemonInfo.url}/api/maintenance/prune`, {
+            await fetch(`${live.info.url}/api/maintenance/prune`, {
               method: "POST",
               headers,
               body: JSON.stringify({ olderThanDays, dryRun }),
@@ -180,7 +215,7 @@ async function getAdminClient(options: GlobalOptions) {
           ).json(),
         compact: async () =>
           await (
-            await fetch(`${daemonInfo.url}/api/maintenance/compact`, {
+            await fetch(`${live.info.url}/api/maintenance/compact`, {
               method: "POST",
               headers,
             })
@@ -223,12 +258,12 @@ function openInBrowser(url: string): void {
 }
 
 async function getTui(options: GlobalOptions): Promise<{ tui: AgentCorpTui; close: () => void }> {
-  const daemonInfo = readDaemonInfo();
-  if (daemonInfo && (await isDaemonHealthy(daemonInfo.url))) {
+  const live = await resolveDaemonInfo();
+  if (live) {
     const creds = loadCredentials();
     return {
       tui: new AgentCorpTui({
-        daemonUrl: daemonInfo.url,
+        daemonUrl: live.info.url,
         adminToken: creds?.adminToken,
       }),
       close: () => {},
@@ -285,23 +320,22 @@ program
   .action(async (options: { port: string; host: string; daemon?: boolean }) => {
     const gOpts = program.opts<GlobalOptions>();
     if (options.daemon) {
+      const targetUrl = `http://${options.host}:${options.port}`;
+      const live = await resolveDaemonInfo(targetUrl);
+      if (live) {
+        output({ startedInBackground: false, alreadyRunning: true, ...live.info });
+        return;
+      }
       const recorded = readDaemonInfo();
-      if (recorded) {
-        const live = await refreshDaemonInfo(recorded);
-        if (live) {
-          output({ startedInBackground: false, alreadyRunning: true, ...live.info });
-          return;
-        }
-        if (await isDaemonHealthy(recorded.url)) {
-          output({
-            startedInBackground: false,
-            alreadyRunning: true,
-            ...recorded,
-            identityVerified: false,
-            message: "Daemon is healthy but predates live identity reporting; restart it before relying on PID control",
-          });
-          return;
-        }
+      if (recorded && (await isDaemonHealthy(recorded.url))) {
+        output({
+          startedInBackground: false,
+          alreadyRunning: true,
+          ...recorded,
+          identityVerified: false,
+          message: "Daemon is healthy but predates live identity reporting; restart it before relying on PID control",
+        });
+        return;
       }
       const args = [
         resolve(process.argv[1] ?? "dist/cli.js"),
@@ -324,11 +358,9 @@ program
       const deadline = Date.now() + 6000;
       while (Date.now() < deadline) {
         await new Promise((resolvePromise) => setTimeout(resolvePromise, 150));
-        const info = readDaemonInfo();
-        if (!info) continue;
-        const live = await refreshDaemonInfo(info);
-        if (live) {
-          output({ startedInBackground: true, ...live.info });
+        const spawnedLive = await resolveDaemonInfo(targetUrl);
+        if (spawnedLive) {
+          output({ startedInBackground: true, ...spawnedLive.info });
           return;
         }
       }
@@ -367,20 +399,16 @@ program
   .command("stop")
   .description("Stop the running central local broker daemon")
   .action(async () => {
-    const info = readDaemonInfo();
-    if (!info) {
-      output({ stopped: false, message: "No running daemon recorded" });
-      return;
-    }
-    const live = await refreshDaemonInfo(info);
+    const live = await resolveDaemonInfo();
     if (!live) {
-      const healthyLegacyDaemon = await isDaemonHealthy(info.url);
+      const info = readDaemonInfo();
+      const healthyLegacyDaemon = info ? await isDaemonHealthy(info.url) : false;
       output({
         stopped: false,
         message: healthyLegacyDaemon
           ? "Daemon is healthy but does not report a verifiable PID; refusing unsafe process termination"
-          : "Recorded daemon is unreachable; refusing to signal a potentially stale PID",
-        recordedPid: info.pid,
+          : "No running daemon recorded",
+        recordedPid: info?.pid,
       });
       return;
     }
@@ -396,17 +424,13 @@ program
   .command("status")
   .description("Check daemon status and health")
   .action(async () => {
-    const info = readDaemonInfo();
-    if (!info) {
-      output({ status: "stopped" });
-      return;
-    }
-    const live = await refreshDaemonInfo(info);
+    const live = await resolveDaemonInfo();
     if (!live) {
-      const healthyLegacyDaemon = await isDaemonHealthy(info.url);
+      const info = readDaemonInfo();
+      const healthyLegacyDaemon = info ? await isDaemonHealthy(info.url) : false;
       output({
-        status: healthyLegacyDaemon ? "running" : "unreachable",
-        ...info,
+        status: healthyLegacyDaemon ? "running" : "stopped",
+        ...(info ?? {}),
         identityVerified: false,
       });
       return;
