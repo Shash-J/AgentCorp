@@ -1255,7 +1255,10 @@ artifact_visibility = "all"
           runWorker("w2", 20),
         ]);
 
-        expect(w1.committed + w2.committed).toBeGreaterThan(0);
+        expect(w1.committed).toBe(20);
+        expect(w2.committed).toBe(20);
+        expect(w1.busyErrors).toBe(0);
+        expect(w2.busyErrors).toBe(0);
 
         // Verify DB integrity and count
         const verifyDb = new AgentCorpDatabase(dbPath);
@@ -1445,6 +1448,88 @@ artifact_visibility = "all"
       } finally {
         await devClient.close();
         await devServer.close();
+        db.close();
+      }
+    });
+
+    it("enforces maintenance_log row ceiling across simulation, compaction, and execution paths", () => {
+      const db = new AgentCorpDatabase(":memory:");
+
+      try {
+        // Insert 15 maintenance logs with a ceiling of 5
+        for (let i = 1; i <= 15; i++) {
+          db.insertMaintenanceLog(
+            {
+              id: `maint_${i}`,
+              action: i % 2 === 0 ? "prune_simulation" : "compact",
+              details: { index: i },
+              createdAt: `2026-09-01T00:00:${String(i).padStart(2, "0")}Z`,
+            },
+            5,
+          );
+        }
+
+        const logs = db.listMaintenanceLogs(50);
+        expect(logs).toHaveLength(5);
+        // Latest entries are retained
+        expect(logs[0]!.id).toBe("maint_15");
+        expect(logs[4]!.id).toBe("maint_11");
+      } finally {
+        db.close();
+      }
+    });
+
+    it("enforces audit maxPayloadBytes byte budget on oversized message payloads and artifact contents", () => {
+      const db = new AgentCorpDatabase(":memory:");
+      const broker = new AgentCorpBroker(TEST_CONFIG, db);
+
+      try {
+        // Create task
+        db.insertTask({
+          taskId: "task_audit_budget",
+          title: "Audit Budget Test",
+          createdBy: "architect",
+          assignedTo: "developer",
+          status: "in_progress",
+        });
+
+        // Small message (under 50 bytes)
+        broker.sendMessage("architect", {
+          taskId: "task_audit_budget",
+          toRole: "developer",
+          type: "status_update",
+          payload: { summary: "short" },
+        });
+
+        // Large message (over 500 bytes)
+        broker.sendMessage("architect", {
+          taskId: "task_audit_budget",
+          toRole: "developer",
+          type: "report",
+          payload: { largeData: "X".repeat(600) },
+        });
+
+        // Large artifact (over 500 bytes)
+        broker.createArtifact("developer", {
+          name: "Large Artifact",
+          type: "report",
+          content: "Y".repeat(600),
+          relatedTaskId: "task_audit_budget",
+        });
+
+        // Generate snapshot with maxPayloadBytes: 100
+        const snapshot = generateAuditSnapshot(broker, { maxPayloadBytes: 100 });
+        expect(snapshot.metadata.maxPayloadBytes).toBe(100);
+
+        // Small message payload remains intact
+        const smallMsg = snapshot.messages.find((m) => m.type === "status_update");
+        expect(smallMsg?.payload).toEqual({ summary: "short" });
+
+        // Large message payload is truncated
+        const largeMsg = snapshot.messages.find((m) => m.type === "report");
+        expect((largeMsg?.payload as { _truncated?: boolean })._truncated).toBe(true);
+        expect((largeMsg?.payload as { byteLength?: number }).byteLength).toBeGreaterThan(500);
+      } finally {
         db.close();
       }
     });

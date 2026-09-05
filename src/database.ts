@@ -22,6 +22,7 @@ export const DEFAULT_PAGE_LIMIT = 50;
 export const MAX_PAGE_LIMIT = 200;
 export const DEFAULT_AUDIT_LIMIT = 500;
 export const MAX_AUDIT_LIMIT = 5000;
+export const MAX_MAINTENANCE_LOG_ENTRIES = 1000;
 
 export interface DatabaseOptions {
   defaultPageSize?: number | undefined;
@@ -261,12 +262,19 @@ export class AgentCorpDatabase {
   }
 
   insertTask(task: TaskRecord): void {
+    const now = new Date().toISOString();
     this.db.prepare(`
       INSERT INTO tasks (task_id, title, description, created_by, assigned_to, status, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      task.taskId, task.title, task.description, task.createdBy, task.assignedTo,
-      task.status, task.createdAt, task.updatedAt,
+      task.taskId,
+      task.title,
+      task.description ?? null,
+      task.createdBy,
+      task.assignedTo ?? null,
+      task.status,
+      task.createdAt ?? now,
+      task.updatedAt ?? now,
     );
   }
 
@@ -1034,11 +1042,19 @@ export class AgentCorpDatabase {
     return result;
   }
 
-  insertMaintenanceLog(record: MaintenanceLogRecord): void {
+  insertMaintenanceLog(record: MaintenanceLogRecord, maxEntries = MAX_MAINTENANCE_LOG_ENTRIES): void {
     this.db.prepare(`
       INSERT INTO maintenance_log (id, action, details_json, created_at)
       VALUES (?, ?, ?, ?)
     `).run(record.id, record.action, JSON.stringify(record.details), record.createdAt);
+
+    // Enforce row ceiling across all maintenance paths (prune execution, simulation, compact)
+    this.db.prepare(`
+      DELETE FROM maintenance_log
+      WHERE id NOT IN (
+        SELECT id FROM maintenance_log ORDER BY created_at DESC, id DESC LIMIT ?
+      )
+    `).run(maxEntries);
   }
 
   listMaintenanceLogs(limit = 50): MaintenanceLogRecord[] {

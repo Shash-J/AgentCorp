@@ -62,21 +62,51 @@ export function generateAuditSnapshot(
   };
 
   const tasks = db.getAuditTasks(exportOptions);
-  const messages = db.getAuditMessages(exportOptions);
+  const rawMessages = db.getAuditMessages(exportOptions);
+  const messages = options.maxPayloadBytes && options.maxPayloadBytes > 0
+    ? rawMessages.map((msg) => {
+        const payloadStr = typeof msg.payload === "string" ? msg.payload : JSON.stringify(msg.payload);
+        const byteLen = Buffer.byteLength(payloadStr, "utf8");
+        if (byteLen > options.maxPayloadBytes!) {
+          return {
+            ...msg,
+            payload: {
+              _truncated: true,
+              byteLength: byteLen,
+              preview: payloadStr.slice(0, Math.min(256, options.maxPayloadBytes!)) + "... [truncated]",
+            },
+          };
+        }
+        return msg;
+      })
+    : rawMessages;
+
   const approvals = db.getAuditApprovals(exportOptions);
-  const artifacts = db.getAuditArtifacts(exportOptions);
+  const rawArtifacts = db.getAuditArtifacts(exportOptions);
+  const artifacts = options.maxPayloadBytes && options.maxPayloadBytes > 0
+    ? rawArtifacts.map((art) => {
+        if (art.content && Buffer.byteLength(art.content, "utf8") > options.maxPayloadBytes!) {
+          return {
+            ...art,
+            content: art.content.slice(0, Math.min(256, options.maxPayloadBytes!)) + "... [truncated]",
+          };
+        }
+        return art;
+      })
+    : rawArtifacts;
 
   const truncated = Boolean(
     tasks.length < matchingTasksCount ||
-    messages.length < matchingMessagesCount ||
+    rawMessages.length < matchingMessagesCount ||
     approvals.length < matchingApprovalsCount ||
-    artifacts.length < matchingArtifactsCount
+    rawArtifacts.length < matchingArtifactsCount
   );
 
   const metadata: AuditSnapshotMetadata = {
     generatedAt: new Date().toISOString(),
     ...(options.since ? { since: options.since } : {}),
     limit: effectiveLimit,
+    ...(options.maxPayloadBytes !== undefined ? { maxPayloadBytes: options.maxPayloadBytes } : {}),
     totalTasksAvailable,
     totalMessagesAvailable,
     totalApprovalsAvailable,
@@ -110,6 +140,9 @@ export function formatAuditMarkdown(snapshot: AuditSnapshot): string {
   }
   if (snapshot.metadata?.limit !== undefined) {
     lines.push(`**Record Limit:** \`${snapshot.metadata.limit}\``);
+  }
+  if (snapshot.metadata?.maxPayloadBytes !== undefined) {
+    lines.push(`**Max Payload Bytes:** \`${snapshot.metadata.maxPayloadBytes}\``);
   }
   lines.push(`**Truncated:** \`${snapshot.metadata?.truncated ? "Yes" : "No"}\`\n`);
 

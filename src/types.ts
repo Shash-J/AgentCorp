@@ -238,12 +238,14 @@ export interface MaintenanceLogRecord {
 export interface AuditExportOptions {
   limit?: number | undefined;
   since?: string | undefined;
+  maxPayloadBytes?: number | undefined;
 }
 
 export interface AuditSnapshotMetadata {
   generatedAt: string;
   since?: string | undefined;
   limit?: number | undefined;
+  maxPayloadBytes?: number | undefined;
   totalTasksAvailable: number;
   totalMessagesAvailable: number;
   totalApprovalsAvailable: number;
