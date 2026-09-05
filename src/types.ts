@@ -283,4 +283,12 @@ export interface AuditSnapshotMetadata {
   matchingApprovalsCount?: number | undefined;
   matchingArtifactsCount?: number | undefined;
   truncated: boolean;
+  rowLimitTruncated: boolean;
+  fieldClippingActive: boolean;
+  fieldClippedRecordsCount?: {
+    tasks: number;
+    messages: number;
+    approvals: number;
+    artifacts: number;
+  } | undefined;
 }

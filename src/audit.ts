@@ -72,12 +72,43 @@ export function generateAuditSnapshot(
   const approvals = db.getAuditApprovals(exportOptions);
   const artifacts = db.getAuditArtifacts(exportOptions);
 
-  const truncated = Boolean(
+  const rowLimitTruncated = Boolean(
     tasks.length < matchingTasksCount ||
     messages.length < matchingMessagesCount ||
     approvals.length < matchingApprovalsCount ||
     artifacts.length < matchingArtifactsCount
   );
+  const truncated = rowLimitTruncated;
+
+  let clippedTasksCount = 0;
+  for (const t of tasks) {
+    if (typeof t.description === "string" && t.description.endsWith("... [truncated]")) {
+      clippedTasksCount++;
+    }
+  }
+
+  let clippedMessagesCount = 0;
+  for (const m of messages) {
+    if (typeof m.payload === "object" && m.payload !== null && (m.payload as any)._truncated === true) {
+      clippedMessagesCount++;
+    }
+  }
+
+  let clippedApprovalsCount = 0;
+  for (const a of approvals) {
+    if (typeof a.context === "object" && a.context !== null && (a.context as any)._truncated === true) {
+      clippedApprovalsCount++;
+    }
+  }
+
+  let clippedArtifactsCount = 0;
+  for (const art of artifacts) {
+    if (typeof art.content === "string" && art.content.endsWith("... [truncated]")) {
+      clippedArtifactsCount++;
+    }
+  }
+
+  const fieldClippingActive = (clippedTasksCount + clippedMessagesCount + clippedApprovalsCount + clippedArtifactsCount) > 0;
 
   const metadata: AuditSnapshotMetadata = {
     generatedAt: new Date().toISOString(),
@@ -93,6 +124,14 @@ export function generateAuditSnapshot(
     matchingApprovalsCount,
     matchingArtifactsCount,
     truncated,
+    rowLimitTruncated,
+    fieldClippingActive,
+    fieldClippedRecordsCount: {
+      tasks: clippedTasksCount,
+      messages: clippedMessagesCount,
+      approvals: clippedApprovalsCount,
+      artifacts: clippedArtifactsCount,
+    },
   };
 
   return {
@@ -118,9 +157,11 @@ export function formatAuditMarkdown(snapshot: AuditSnapshot): string {
   if (snapshot.metadata?.limit !== undefined) {
     lines.push(`**Record Limit:** \`${snapshot.metadata.limit}\``);
   }
+  lines.push(`**Row Limit Truncated:** \`${snapshot.metadata?.rowLimitTruncated ? "Yes" : "No"}\``);
   if (snapshot.metadata?.maxPayloadBytes !== undefined) {
     lines.push(`**Max Payload Bytes:** \`${snapshot.metadata.maxPayloadBytes}\``);
   }
+  lines.push(`**Field Clipping Active:** \`${snapshot.metadata?.fieldClippingActive ? "Yes" : "No"}\``);
   lines.push(`**Truncated:** \`${snapshot.metadata?.truncated ? "Yes" : "No"}\`\n`);
 
   lines.push("## Active Roles & Bindings\n");

@@ -83,5 +83,62 @@ describe("audit", () => {
     expect(jsonContent.messages.length).toBe(1);
     expect(jsonContent.approvals.length).toBe(1);
     expect(jsonContent.artifacts.length).toBe(1);
+    expect(jsonContent.metadata.rowLimitTruncated).toBe(false);
+    expect(jsonContent.metadata.fieldClippingActive).toBe(false);
+  });
+
+  it("distinguishes row-limit truncation from field-level clipping in metadata and markdown", () => {
+    // 1. Create a task with oversized description and message with oversized payload
+    const longDesc = "D".repeat(2000);
+    const longPayload = { data: "M".repeat(3000) };
+
+    const task = broker.createTask("architect", {
+      title: "Clipped Task",
+      description: longDesc,
+    });
+
+    broker.sendMessage("architect", {
+      toRole: "developer",
+      type: "proposal",
+      payload: longPayload,
+      taskId: task.taskId,
+    });
+
+    // Test A: Field clipping active, but row limit not truncated
+    const clippedSnapshot = generateAuditSnapshot(broker, {
+      limit: 100,
+      maxPayloadBytes: 256,
+    });
+
+    expect(clippedSnapshot.metadata.rowLimitTruncated).toBe(false);
+    expect(clippedSnapshot.metadata.truncated).toBe(false);
+    expect(clippedSnapshot.metadata.fieldClippingActive).toBe(true);
+    expect(clippedSnapshot.metadata.fieldClippedRecordsCount?.tasks).toBe(1);
+    expect(clippedSnapshot.metadata.fieldClippedRecordsCount?.messages).toBe(1);
+    expect(clippedSnapshot.tasks[0]?.description).toContain("... [truncated]");
+
+    const { markdownPath } = exportAuditTrail(broker, tempDir, {
+      limit: 100,
+      maxPayloadBytes: 256,
+    });
+    const md = readFileSync(markdownPath, "utf8");
+    expect(md).toContain("**Row Limit Truncated:** `No`");
+    expect(md).toContain("**Field Clipping Active:** `Yes`");
+
+    // Test B: Row limit truncated, no field clipping
+    // Create 3 extra tasks to exceed limit: 2
+    broker.createTask("architect", { title: "Extra Task 1" });
+    broker.createTask("architect", { title: "Extra Task 2" });
+    broker.createTask("architect", { title: "Extra Task 3" });
+
+    const rowTruncatedSnapshot = generateAuditSnapshot(broker, {
+      limit: 2,
+      maxPayloadBytes: 50000,
+    });
+
+    expect(rowTruncatedSnapshot.metadata.rowLimitTruncated).toBe(true);
+    expect(rowTruncatedSnapshot.metadata.truncated).toBe(true);
+    expect(rowTruncatedSnapshot.metadata.fieldClippingActive).toBe(false);
   });
 });
+

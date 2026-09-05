@@ -55,14 +55,27 @@ Goal: ensure bounded memory and disk usage, auto-recovering stdio adapters, and 
 
 - Hard memory & disk bounds: 2 MB HTTP body, 1 MB message payload, 5 MB artifact content, configurable 64 KB audit payload budget
 - Opaque cursor pagination across tasks, messages, inboxes, artifacts, and approvals
-- Safe history pruning (`agentcorp prune`) with dry-run simulation and SQLite WAL compaction (`agentcorp compact`)
+- Safe history pruning (`agentcorp prune`) with dry-run simulation, foreign-key reply chain detachment, and SQLite WAL compaction (`agentcorp compact`)
 - Resilient Stdio MCP Proxy with auto-reconnection and bounded exponential backoff across daemon crashes/restarts
+- Cross-process startup locking with active PID checking and stale lock recovery
+- Working directory isolation automatically deriving project-scoped runtime paths from `org.toml`
 - Mutation idempotency keys (`idempotency_key`) and operation lookup (`get_operation`) guaranteeing zero duplicate mutations
-- Role presence tracking (`online`, `idle`, `offline`) and last-seen telemetry across `get_work_queue`, `/health`, and Web Console
+- Role presence tracking (`online`, `idle`, `offline`) and activity freshness telemetry (`fresh`, `idle`, `stale`) across `get_work_queue`, `/health`, and Web Console
 - Bounded rotating daemon logs (`.agentcorp/daemon.log`, 5 MB max with 3 backups) and crash forensics (`.agentcorp/crash.log`)
 - Diagnostic tool `agentcorp doctor` for comprehensive subsystem verification
+- Audit export explicit semantics distinguishing row-limit truncation from field-level clipping
 
-Exit criteria met: Chaos E2E kills daemon mid-session and proves same client recovery, durable state, zero duplicate mutation, bounded logs, and verified doctor diagnostics.
+Exit criteria met: Chaos E2E kills daemon mid-session and proves same client recovery, durable state, zero duplicate mutation, bounded logs, clean package smoke test outside checkout, and verified doctor diagnostics.
+
+## Release Candidate 0.1.0-alpha.1 (complete)
+
+Goal: deliver a reproducible, high-standard open-source developer preview release candidate.
+
+- Cross-platform GitHub CI across Ubuntu, Windows, and macOS on Node 22
+- Outside-checkout temporary-install package smoke test leaving zero workspace debris
+- Curated npm package manifest (< 200 KB packed) retaining declarations, source maps, console assets, and docs while excluding binary images and internal design specs
+- Open source community templates (Contributor Covenant Code of Conduct, GitHub Issue & PR templates)
+- Complete maintainer release guide (`docs/RELEASING.md`) separating automated checks from maintainer-owned npm publishing
 
 ## Milestone 3 — adapters and interoperability (next)
 

@@ -8,11 +8,12 @@ on:
 
 jobs:
   build-and-test:
+    name: Test on ${{ matrix.os }} (Node ${{ matrix.node-version }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         node-version: [22.x]
 
     steps:
@@ -31,11 +32,23 @@ jobs:
       - name: Typecheck TypeScript
         run: npm run check
 
-      - name: Run unit and negative-path tests
-        run: npm test
-
       - name: Build dist package
         run: npm run build
 
+      - name: Run test suite
+        run: npm test
+
+      - name: Validate default org.toml configuration
+        run: node dist/cli.js validate --config org.toml
+
+      - name: Validate examples/org.toml configuration
+        run: node dist/cli.js validate --config examples/org.toml
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
+
       - name: Verify npm packaging dry run
-        run: npm pack --dry-run
+        run: npm pack --dry-run --ignore-scripts
+
+      - name: Verify system doctor diagnostics
+        run: node dist/cli.js doctor --config org.toml

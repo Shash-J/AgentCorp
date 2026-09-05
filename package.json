@@ -28,9 +28,9 @@
   "files": [
     "dist",
     "docs",
+    "!docs/images/**",
     "examples",
     "README.md",
-    "AgentCorp_Design_Spec.md",
     "CONTRIBUTING.md",
     "SECURITY.md",
     "LICENSE",

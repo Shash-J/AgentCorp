@@ -1292,11 +1292,12 @@ export class AgentCorpDatabase {
           WHEN description IS NOT NULL AND OCTET_LENGTH(description) > ? THEN CAST(SUBSTR(CAST(description AS BLOB), 1, ?) AS TEXT)
           ELSE description 
         END AS description,
+        CASE WHEN description IS NOT NULL THEN OCTET_LENGTH(description) ELSE NULL END AS description_full_length,
         created_by, assigned_to, status, created_at, updated_at
       FROM tasks`;
       params.push(maxBytes, maxBytes);
     } else {
-      query = "SELECT * FROM tasks";
+      query = "SELECT *, CASE WHEN description IS NOT NULL THEN OCTET_LENGTH(description) ELSE NULL END AS description_full_length FROM tasks";
     }
 
     if (options?.since) {
@@ -1306,7 +1307,21 @@ export class AgentCorpDatabase {
     query += " ORDER BY updated_at DESC, task_id DESC LIMIT ?";
     params.push(limit);
     const rows = this.db.prepare(query).all(...params) as Row[];
-    const items = rows.map(mapTask);
+    const items = rows.map((r) => {
+      const fullLen = typeof r.description_full_length === "number" ? r.description_full_length : 0;
+      const base = mapTask(r);
+      if (maxBytes !== undefined && maxBytes > 0 && fullLen > maxBytes) {
+        const marker = "... [truncated]";
+        const markerBytes = Buffer.byteLength(marker, "utf8");
+        const keepBytes = Math.max(0, maxBytes - markerBytes);
+        const preview = typeof r.description === "string" ? r.description.slice(0, keepBytes) : "";
+        return {
+          ...base,
+          description: preview + marker,
+        };
+      }
+      return base;
+    });
     items.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.taskId.localeCompare(b.taskId));
     return items;
   }

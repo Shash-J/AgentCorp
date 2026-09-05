@@ -1,22 +1,42 @@
 # Changelog
 
-All notable changes will be documented here. This project follows Semantic
-Versioning after the first public release.
+All notable changes to AgentCorp will be documented in this file.
+This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after the first public release.
 
-## 0.1.0 — Unreleased
+---
 
-- Added the SQLite-backed broker domain core.
-- Added role-bound MCP v2 tools over stdio.
-- Added task, message, policy, approval, and artifact workflows.
-- Added the human approval CLI and starter organization configuration.
-- Added core security-invariant tests and initial project documentation.
-- Added long-lived broker daemon hosting MCP Streamable HTTP and Admin REST API.
-- Added thin role-bound stdio proxy adapter with auto-spawn capability.
-- Added credential management storing role and admin tokens in `.agentcorp/credentials.json`.
-- Added versioned database migrations with schema enforcement.
-- Added human-readable Markdown and JSON audit trail export (`coord/`).
-- Added daemon lifecycle management (`start`, `stop`, `status`).
-- Added approval-bound task activation so intended assignees cannot act on proposed work early.
-- Added `get_work_queue` for a single prioritized coordination view.
-- Added idempotent `accept_handoff` to acknowledge and start approved work without duplicate transitions.
-- Made daemon lifecycle control self-heal stale PID metadata and verify live identity before stopping a process.
+## [0.1.0-alpha.1] — 2026-09-05
+
+Initial public developer preview release of AgentCorp: a local-first coordination broker for teams of AI agents.
+
+### Core Architecture & Coordination Broker
+- **Local-First MCP Broker**: Implemented single-writer, multi-reader architecture coordinating AI agents across distinct roles without coupling agents to a single vendor, framework, or model.
+- **Role Isolation & Access Control**: Strict caller role authentication enforcing allowed peer communications and role-scoped artifact visibility rules defined in `org.toml`.
+- **Approval-Bound Task Activation**: Gated task handoffs where tasks remain in `proposed` state and are hidden from intended assignees until linked proposals are human-approved.
+- **Prioritized Work Queue (`get_work_queue`)**: Unified endpoint returning unread messages, active tasks, live role presence, and ranked actionable suggestions in one call.
+- **Idempotent Handoff Acceptance (`accept_handoff`)**: Atomically acknowledges approved proposals and initiates task transitions without duplicate executions.
+
+### Reliability, Self-Healing & Concurrency
+- **Resilient Stdio MCP Proxy**: Automatic daemon discovery, bounded exponential backoff (100ms–2000ms), and transparent auto-spawn recovery when the broker daemon restarts or crashes.
+- **Cross-Process Startup Lock**: Atomic file-locking mechanism (`.agentcorp/daemon.json.lock`) with active PID probes and stale lock recovery (>10s) ensuring exactly one daemon spawns per project.
+- **Working Directory Isolation**: Automatic path resolution allowing MCP host processes to run from arbitrary working directories while automatically deriving project-scoped database, credentials, logs, and daemon control files from `org.toml`.
+- **Mutation Idempotency (`idempotency_key`)**: Role-scoped composite primary key `(role_id, key)` with SHA-256 operation and payload hash validation, rejecting cross-role key collisions and stale mismatches.
+- **Re-Entrant Atomic Transactions**: SQLite transaction management with depth tracking guaranteeing atomic commits and clean rollbacks for business mutations and idempotency records.
+
+### Persistence, Migrations & Bounded Storage
+- **Transactional SQLite Persistence**: Built on Node.js 22 built-in `node:sqlite` with WAL journal mode, busy timeouts, and versioned schema migrations (Versions 1 through 7).
+- **Hard Resource Bounds**: Enforced 2 MB HTTP body limits, 1 MB message payload limits, 5 MB artifact limits, and configurable audit payload extraction budgets (`max_audit_payload_bytes`).
+- **Opaque Cursor Pagination**: Cursor-based pagination across inboxes, tasks, threads, approvals, and artifacts.
+- **History Pruning & Compaction**: `agentcorp prune` command with foreign-key reply chain detachment, dry-run simulation, and SQLite WAL compaction (`agentcorp compact`).
+
+### Human Oversight & Operational Observability
+- **Human Review CLI (`agentcorp review`)**: Interactive terminal-native review loop with approve, edit-and-approve, reject, skip, and quit actions.
+- **Dark Glassmorphic Web Dashboard (`agentcorp console`)**: Live real-time dashboard powered by Server-Sent Events (`/api/events`) with side-by-side JSON diff editor and live status telemetry.
+- **Role Presence & Activity Freshness**: Telemetry tracking role liveness, last seen timestamps, and activity freshness (`fresh`, `idle`, `stale`).
+- **Diagnostic Health Check (`agentcorp doctor`)**: Comprehensive operational diagnostics inspecting configuration, database schema, credentials, daemon health, and crash logs.
+- **Structured Log Rotation & Sanitization**: Bounded rotating daemon logs (`.agentcorp/daemon.log`, 5 MB max with 3 backups) with payload redaction protecting conversation confidentiality, alongside fatal crash diagnostics (`.agentcorp/crash.log`).
+
+### Audit Integrity & Truncation Semantics
+- **Explicit Audit Semantics**: Formatted Markdown and JSON audit exports (`coord/audit.md`, `coord/audit.json`) distinguishing row-limit truncation (`rowLimitTruncated`) from field-level clipping (`fieldClippingActive`).
+- **SQLite-Layer Payload Bounding**: UTF-8 BLOB-cast byte-aware truncation using `OCTET_LENGTH` and `SUBSTR` preventing native and V8 heap inflation on oversized audit records.
+- **Memory-Isolated Approvals**: Omission of discarded `edited_payload` from SQL query projections.

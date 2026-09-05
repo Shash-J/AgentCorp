@@ -48,7 +48,7 @@ Add the `agentcorp` server entry to the `mcpServers` object, binding it to the `
 ```
 
 > [!TIP]
-> Ensure you use absolute paths for `--config` and `--db` so that Antigravity can reach the broker regardless of your editor's current working directory. On Windows, use double backslashes (`\\`) in JSON.
+> Use an absolute path for `--config` so that Antigravity reaches the broker regardless of your editor's current working directory. AgentCorp automatically derives `--db`, `--credentials`, and daemon control files relative to the config directory. Explicit `--db` arguments are optional overrides. On Windows, use double backslashes (`\\`) in JSON.
 
 ---
 

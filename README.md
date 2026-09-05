@@ -67,9 +67,10 @@ Runtime state under `.agentcorp/` should not be committed.
 
 ## Connect agents over MCP
 
-Each local MCP connection is bound to exactly one configured role. Use absolute
-paths for `--config` and `--db` when your MCP host does not preserve the project
-working directory.
+Each local MCP connection is bound to exactly one configured role. When your
+MCP host does not preserve the project working directory, pass an absolute path
+to `--config`. AgentCorp automatically derives project-scoped `--db`, `--credentials`,
+and daemon control paths relative to the config file (or you can provide explicit overrides):
 
 ```json
 {
@@ -78,7 +79,6 @@ working directory.
       "command": "agentcorp",
       "args": [
         "--config", "/absolute/project/org.toml",
-        "--db", "/absolute/project/.agentcorp/agentcorp.db",
         "mcp", "--role", "architect"
       ]
     }
@@ -86,8 +86,9 @@ working directory.
 }
 ```
 
-Configure the second agent with the same config and database paths, changing
-only the final role to `developer`.
+Configure the second agent with the same config path, changing only the final
+role to `developer`. You may also explicitly provide `--db /absolute/project/.agentcorp/agentcorp.db`
+if using a custom database location.
 
 The MCP tool surface includes 15 tools:
 

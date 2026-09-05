@@ -73,3 +73,4 @@ For Windsurf or any VS Code MCP extension supporting stdio:
 2. Pass arguments:
    `["<absolute-path-to-agentcorp>/dist/cli.js", "mcp", "--role", "<role-id>", "--config", "<path-to-org.toml>", "--db", "<path-to-db>"]`.
 3. The adapter will handle daemon auto-spawning, role authentication, and tool routing transparently.
+4. Specifying `--config` automatically derives `--db`, credentials, and daemon control files relative to the config file's directory. Providing `--db` is an optional override for custom database paths.

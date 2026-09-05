@@ -44,7 +44,7 @@ args = [
 ```
 
 > [!NOTE]
-> On Windows, ensure path backslashes are escaped (`\\`) in TOML strings, or use forward slashes (`/`).
+> On Windows, ensure path backslashes are escaped (`\\`) in TOML strings, or use forward slashes (`/`). Providing `--config` automatically derives the project-scoped database (`.agentcorp/agentcorp.db`), credentials, and daemon files; `--db` is optional.
 
 ---
 
