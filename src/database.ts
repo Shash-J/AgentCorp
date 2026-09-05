@@ -20,6 +20,13 @@ import type {
 
 export const DEFAULT_PAGE_LIMIT = 50;
 export const MAX_PAGE_LIMIT = 200;
+export const DEFAULT_AUDIT_LIMIT = 500;
+export const MAX_AUDIT_LIMIT = 5000;
+
+export interface DatabaseOptions {
+  defaultPageSize?: number | undefined;
+  maxPageSize?: number | undefined;
+}
 
 export function encodeCursor(timestamp: string, id: string): string {
   return Buffer.from(JSON.stringify({ t: timestamp, id })).toString("base64url");
@@ -40,9 +47,9 @@ export function decodeCursor(cursor?: string): { timestamp?: string | undefined;
   return { id: cursor };
 }
 
-export function parseLimit(limit?: number): number {
-  if (limit === undefined || limit === null || Number.isNaN(limit)) return DEFAULT_PAGE_LIMIT;
-  return Math.min(Math.max(1, Math.floor(limit)), MAX_PAGE_LIMIT);
+export function parseLimit(limit?: number, defaultLimit = DEFAULT_PAGE_LIMIT, maxLimit = MAX_PAGE_LIMIT): number {
+  if (limit === undefined || limit === null || Number.isNaN(limit)) return defaultLimit;
+  return Math.min(Math.max(1, Math.floor(limit)), maxLimit);
 }
 
 type Row = Record<string, unknown>;
@@ -142,12 +149,20 @@ function mapApproval(row: Row): PendingApproval {
 
 export class AgentCorpDatabase {
   readonly db: DatabaseSync;
+  readonly defaultPageSize: number;
+  readonly maxPageSize: number;
 
-  constructor(path = ".agentcorp/agentcorp.db") {
+  constructor(path = ".agentcorp/agentcorp.db", options: DatabaseOptions = {}) {
     if (path !== ":memory:") mkdirSync(dirname(resolve(path)), { recursive: true });
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
+    this.defaultPageSize = options.defaultPageSize ?? DEFAULT_PAGE_LIMIT;
+    this.maxPageSize = options.maxPageSize ?? MAX_PAGE_LIMIT;
     this.migrate();
+  }
+
+  resolveLimit(limit?: number): number {
+    return parseLimit(limit, this.defaultPageSize, this.maxPageSize);
   }
 
   close(): void {
@@ -261,7 +276,7 @@ export class AgentCorpDatabase {
   }
 
   listTasksForRolePaginated(roleId: string, options?: PaginationOptions): PaginatedResult<TaskRecord> {
-    const limit = parseLimit(options?.limit);
+    const limit = this.resolveLimit(options?.limit);
     let cursorTime: string | null = null;
     let cursorId: string | null = null;
     const decoded = decodeCursor(options?.cursor);
@@ -375,7 +390,7 @@ export class AgentCorpDatabase {
   }
 
   listInboxPaginated(roleId: string, options?: PaginationOptions): PaginatedResult<MessageRecord> {
-    const limit = parseLimit(options?.limit);
+    const limit = this.resolveLimit(options?.limit);
     let cursorTime: string | null = null;
     let cursorId: string | null = null;
     const decoded = decodeCursor(options?.cursor);
@@ -425,7 +440,7 @@ export class AgentCorpDatabase {
   }
 
   listThreadPaginated(taskId: string, roleId: string, options?: PaginationOptions): PaginatedResult<MessageRecord> {
-    const limit = parseLimit(options?.limit);
+    const limit = this.resolveLimit(options?.limit);
     let cursorTime: string | null = null;
     let cursorId: string | null = null;
     const decoded = decodeCursor(options?.cursor);
@@ -515,7 +530,7 @@ export class AgentCorpDatabase {
   }
 
   listArtifactsPaginated(taskId: string | null, options?: PaginationOptions): PaginatedResult<ArtifactRecord> {
-    const limit = parseLimit(options?.limit);
+    const limit = this.resolveLimit(options?.limit);
     let cursorTime: string | null = null;
     let cursorId: string | null = null;
     const decoded = decodeCursor(options?.cursor);
@@ -595,7 +610,7 @@ export class AgentCorpDatabase {
   }
 
   listPendingApprovalsPaginated(options?: PaginationOptions): PaginatedResult<PendingApproval> {
-    const limit = parseLimit(options?.limit);
+    const limit = this.resolveLimit(options?.limit);
     let cursorTime: string | null = null;
     let cursorId: string | null = null;
     const decoded = decodeCursor(options?.cursor);
@@ -657,7 +672,7 @@ export class AgentCorpDatabase {
   }
 
   listAllTasksPaginated(options?: PaginationOptions): PaginatedResult<TaskRecord> {
-    const limit = parseLimit(options?.limit);
+    const limit = this.resolveLimit(options?.limit);
     let cursorTime: string | null = null;
     let cursorId: string | null = null;
     const decoded = decodeCursor(options?.cursor);
@@ -701,7 +716,7 @@ export class AgentCorpDatabase {
   }
 
   listAllMessagesPaginated(options?: PaginationOptions): PaginatedResult<MessageRecord> {
-    const limit = parseLimit(options?.limit);
+    const limit = this.resolveLimit(options?.limit);
     let cursorTime: string | null = null;
     let cursorId: string | null = null;
     const decoded = decodeCursor(options?.cursor);
@@ -749,7 +764,7 @@ export class AgentCorpDatabase {
   }
 
   listAllApprovalsPaginated(options?: PaginationOptions): PaginatedResult<PendingApproval> {
-    const limit = parseLimit(options?.limit);
+    const limit = this.resolveLimit(options?.limit);
     let cursorTime: string | null = null;
     let cursorId: string | null = null;
     const decoded = decodeCursor(options?.cursor);
@@ -904,7 +919,20 @@ export class AgentCorpDatabase {
           `).run(cutoff);
         }
 
-        // 2. Delete message events
+        // 2. Detach in_reply_to references on any message that replies to a message about to be deleted
+        this.db.prepare(`
+          UPDATE messages
+          SET in_reply_to = NULL
+          WHERE in_reply_to IN (
+            SELECT message_id FROM messages
+            WHERE task_id IN (
+              SELECT task_id FROM tasks
+              WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ?
+            ) OR (task_id IS NULL AND resolved_at IS NOT NULL AND resolved_at < ?)
+          )
+        `).run(cutoff, cutoff);
+
+        // 3. Delete message events
         this.db.prepare(`
           DELETE FROM message_events
           WHERE message_id IN (
@@ -916,7 +944,7 @@ export class AgentCorpDatabase {
           )
         `).run(cutoff, cutoff);
 
-        // 3. Delete messages
+        // 4. Delete messages
         this.db.prepare(`
           DELETE FROM messages
           WHERE task_id IN (
@@ -925,7 +953,7 @@ export class AgentCorpDatabase {
           ) OR (task_id IS NULL AND resolved_at IS NOT NULL AND resolved_at < ?)
         `).run(cutoff, cutoff);
 
-        // 4. Delete task transitions
+        // 5. Delete task transitions
         this.db.prepare(`
           DELETE FROM task_transitions
           WHERE task_id IN (
@@ -934,7 +962,7 @@ export class AgentCorpDatabase {
           )
         `).run(cutoff);
 
-        // 5. Delete approvals
+        // 6. Delete approvals
         this.db.prepare(`
           DELETE FROM approvals
           WHERE (status IN ('approved', 'rejected') AND decided_at IS NOT NULL AND decided_at < ?)
@@ -944,21 +972,34 @@ export class AgentCorpDatabase {
                 ))
         `).run(cutoff, cutoff);
 
-        // 6. Delete tasks
+        // 7. Delete tasks
         this.db.prepare(`
           DELETE FROM tasks
           WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < ?
         `).run(cutoff);
+
+        // 8. Bounded maintenance log retention
+        this.db.prepare(`
+          DELETE FROM maintenance_log
+          WHERE created_at < ?
+        `).run(cutoff);
+
+        // 9. Persist prune execution log inside transaction
+        this.insertMaintenanceLog({
+          id: `maint_${randomUUID()}`,
+          action: "prune_execution",
+          details: result,
+          createdAt: new Date().toISOString(),
+        });
+      });
+    } else {
+      this.insertMaintenanceLog({
+        id: `maint_${randomUUID()}`,
+        action: "prune_simulation",
+        details: result,
+        createdAt: new Date().toISOString(),
       });
     }
-
-    // Persist maintenance log record
-    this.insertMaintenanceLog({
-      id: `maint_${randomUUID()}`,
-      action: dryRun ? "prune_simulation" : "prune_execution",
-      details: result,
-      createdAt: new Date().toISOString(),
-    });
 
     return result;
   }
@@ -984,16 +1025,12 @@ export class AgentCorpDatabase {
       checkpointedPages,
       vacuumed: true,
     };
-    try {
-      this.insertMaintenanceLog({
-        id: `maint_${randomUUID()}`,
-        action: "compact",
-        details: result,
-        createdAt: new Date().toISOString(),
-      });
-    } catch {
-      // Best effort
-    }
+    this.insertMaintenanceLog({
+      id: `maint_${randomUUID()}`,
+      action: "compact",
+      details: result,
+      createdAt: new Date().toISOString(),
+    });
     return result;
   }
 
@@ -1039,68 +1076,112 @@ export class AgentCorpDatabase {
     return Number(row.count);
   }
 
-  getAuditTasks(options?: AuditExportOptions): TaskRecord[] {
-    let query = "SELECT * FROM tasks";
+  countAuditTasks(options?: AuditExportOptions): number {
+    let query = "SELECT COUNT(*) as count FROM tasks";
+    const params: Array<string | number> = [];
+    if (options?.since) {
+      query += " WHERE (created_at >= ? OR updated_at >= ?)";
+      params.push(options.since, options.since);
+    }
+    const row = this.db.prepare(query).get(...params) as { count: number };
+    return Number(row.count);
+  }
+
+  countAuditMessages(options?: AuditExportOptions): number {
+    let query = "SELECT COUNT(*) as count FROM messages";
     const params: Array<string | number> = [];
     if (options?.since) {
       query += " WHERE created_at >= ?";
       params.push(options.since);
     }
-    query += " ORDER BY created_at ASC";
-    if (options?.limit) {
-      query += " LIMIT ?";
-      params.push(options.limit);
+    const row = this.db.prepare(query).get(...params) as { count: number };
+    return Number(row.count);
+  }
+
+  countAuditApprovals(options?: AuditExportOptions): number {
+    let query = "SELECT COUNT(*) as count FROM approvals";
+    const params: Array<string | number> = [];
+    if (options?.since) {
+      query += " WHERE created_at >= ?";
+      params.push(options.since);
     }
+    const row = this.db.prepare(query).get(...params) as { count: number };
+    return Number(row.count);
+  }
+
+  countAuditArtifacts(options?: AuditExportOptions): number {
+    let query = "SELECT COUNT(*) as count FROM artifacts";
+    const params: Array<string | number> = [];
+    if (options?.since) {
+      query += " WHERE created_at >= ?";
+      params.push(options.since);
+    }
+    const row = this.db.prepare(query).get(...params) as { count: number };
+    return Number(row.count);
+  }
+
+  getAuditTasks(options?: AuditExportOptions): TaskRecord[] {
+    const limit = parseLimit(options?.limit, DEFAULT_AUDIT_LIMIT, MAX_AUDIT_LIMIT);
+    let query = "SELECT * FROM tasks";
+    const params: Array<string | number> = [];
+    if (options?.since) {
+      query += " WHERE (created_at >= ? OR updated_at >= ?)";
+      params.push(options.since, options.since);
+    }
+    query += " ORDER BY updated_at DESC, task_id DESC LIMIT ?";
+    params.push(limit);
     const rows = this.db.prepare(query).all(...params) as Row[];
-    return rows.map(mapTask);
+    const items = rows.map(mapTask);
+    items.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.taskId.localeCompare(b.taskId));
+    return items;
   }
 
   getAuditMessages(options?: AuditExportOptions): MessageRecord[] {
+    const limit = parseLimit(options?.limit, DEFAULT_AUDIT_LIMIT, MAX_AUDIT_LIMIT);
     let query = "SELECT * FROM messages";
     const params: Array<string | number> = [];
     if (options?.since) {
       query += " WHERE created_at >= ?";
       params.push(options.since);
     }
-    query += " ORDER BY created_at ASC";
-    if (options?.limit) {
-      query += " LIMIT ?";
-      params.push(options.limit);
-    }
+    query += " ORDER BY created_at DESC, message_id DESC LIMIT ?";
+    params.push(limit);
     const rows = this.db.prepare(query).all(...params) as Row[];
-    return rows.map(mapMessage);
+    const items = rows.map(mapMessage);
+    items.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.messageId.localeCompare(b.messageId));
+    return items;
   }
 
   getAuditApprovals(options?: AuditExportOptions): PendingApproval[] {
+    const limit = parseLimit(options?.limit, DEFAULT_AUDIT_LIMIT, MAX_AUDIT_LIMIT);
     let query = "SELECT * FROM approvals";
     const params: Array<string | number> = [];
     if (options?.since) {
       query += " WHERE created_at >= ?";
       params.push(options.since);
     }
-    query += " ORDER BY created_at ASC";
-    if (options?.limit) {
-      query += " LIMIT ?";
-      params.push(options.limit);
-    }
+    query += " ORDER BY created_at DESC, approval_id DESC LIMIT ?";
+    params.push(limit);
     const rows = this.db.prepare(query).all(...params) as Row[];
-    return rows.map(mapApproval);
+    const items = rows.map(mapApproval);
+    items.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.approvalId.localeCompare(b.approvalId));
+    return items;
   }
 
   getAuditArtifacts(options?: AuditExportOptions): ArtifactRecord[] {
+    const limit = parseLimit(options?.limit, DEFAULT_AUDIT_LIMIT, MAX_AUDIT_LIMIT);
     let query = "SELECT * FROM artifacts";
     const params: Array<string | number> = [];
     if (options?.since) {
       query += " WHERE created_at >= ?";
       params.push(options.since);
     }
-    query += " ORDER BY created_at ASC";
-    if (options?.limit) {
-      query += " LIMIT ?";
-      params.push(options.limit);
-    }
+    query += " ORDER BY created_at DESC, artifact_id DESC LIMIT ?";
+    params.push(limit);
     const rows = this.db.prepare(query).all(...params) as Row[];
-    return rows.map((r) => mapArtifact(r, false));
+    const items = rows.map((r) => mapArtifact(r, false));
+    items.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.artifactId.localeCompare(b.artifactId));
+    return items;
   }
 }
 

@@ -31,6 +31,15 @@ export function parseOrgConfig(raw: string): OrgConfig {
       }
     }
   }
+
+  if (result.data.limits?.default_page_size !== undefined && result.data.limits?.max_page_size !== undefined) {
+    invariant(
+      result.data.limits.default_page_size <= result.data.limits.max_page_size,
+      "INVALID_CONFIG",
+      "default_page_size cannot be greater than max_page_size",
+    );
+  }
+
   return result.data;
 }
 

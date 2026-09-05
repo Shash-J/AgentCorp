@@ -36,6 +36,7 @@ export function createMcpServer(
   agentId: string,
 ): McpServer {
   const role = broker.getRole(callerRole);
+  const maxPageSize = broker.database.maxPageSize;
   const server = new McpServer({ name: "agentcorp", version: "0.1.0" });
 
   server.registerTool(
@@ -88,7 +89,7 @@ export function createMcpServer(
       title: "List visible tasks",
       description: "List tasks in which the bound role participates.",
       inputSchema: z.object({
-        limit: z.number().int().positive().max(200).optional(),
+        limit: z.number().int().positive().max(maxPageSize).optional(),
         cursor: z.string().optional(),
         envelope: z.boolean().optional(),
       }),
@@ -141,7 +142,7 @@ export function createMcpServer(
       title: "Read delivered messages",
       description: "Return only approved or delivered messages addressed to the bound role.",
       inputSchema: z.object({
-        limit: z.number().int().positive().max(200).optional(),
+        limit: z.number().int().positive().max(maxPageSize).optional(),
         cursor: z.string().optional(),
         envelope: z.boolean().optional(),
       }),
@@ -179,7 +180,7 @@ export function createMcpServer(
       description: "Return the task message history visible to the bound role.",
       inputSchema: z.object({
         task_id: z.string().min(1),
-        limit: z.number().int().positive().max(200).optional(),
+        limit: z.number().int().positive().max(maxPageSize).optional(),
         cursor: z.string().optional(),
         envelope: z.boolean().optional(),
       }),
@@ -221,7 +222,7 @@ export function createMcpServer(
       description: "List artifact metadata after applying the bound role's visibility rules.",
       inputSchema: z.object({
         task_id: z.string().optional(),
-        limit: z.number().int().positive().max(200).optional(),
+        limit: z.number().int().positive().max(maxPageSize).optional(),
         cursor: z.string().optional(),
         envelope: z.boolean().optional(),
       }),
@@ -249,12 +250,17 @@ export function createMcpServer(
       description: "Validate a lifecycle transition and route it through the approval policy engine.",
       inputSchema: z.object({
         task_id: z.string().min(1),
-        new_status: TaskStatusSchema,
+        new_status: TaskStatusSchema.optional(),
+        status: TaskStatusSchema.optional(),
         risk_tags: z.array(z.string()).default([]),
+      }).refine((data) => Boolean(data.new_status || data.status), {
+        message: "Provide new_status or status",
       }),
     },
-    ({ task_id, new_status, risk_tags }) => guarded(() =>
-      broker.updateTaskStatus(callerRole, task_id, new_status, risk_tags)),
+    (input) => guarded(() => {
+      const targetStatus = (input.new_status ?? input.status)!;
+      return broker.updateTaskStatus(callerRole, input.task_id, targetStatus, input.risk_tags);
+    }),
   );
 
   return server;

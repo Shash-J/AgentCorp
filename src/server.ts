@@ -505,10 +505,16 @@ export class AgentCorpServer {
     }
 
     if (path === "/api/maintenance/prune" && method === "POST") {
-      const body = await this.readJsonBody<{ olderThanDays?: number; dryRun?: boolean; deleteArtifacts?: boolean }>(req);
+      const body = await this.readJsonBody<{
+        olderThanDays?: number;
+        dryRun?: boolean;
+        execute?: boolean;
+        deleteArtifacts?: boolean;
+      }>(req);
+      const isDryRun = body.execute === true ? false : true;
       const result = this.broker.prune({
         olderThanDays: body.olderThanDays ?? 30,
-        dryRun: body.dryRun ?? false,
+        dryRun: isDryRun,
         deleteArtifacts: body.deleteArtifacts ?? false,
       });
       this.sendJson(res, 200, result);

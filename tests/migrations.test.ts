@@ -14,14 +14,14 @@ describe("migrations", () => {
     try {
       expect(getCurrentSchemaVersion(rawDb)).toBe(0);
       const result = runMigrations(rawDb);
-      expect(result.applied).toEqual([1, 2, 3, 4]);
-      expect(result.currentVersion).toBe(4);
-      expect(getCurrentSchemaVersion(rawDb)).toBe(4);
+      expect(result.applied).toEqual([1, 2, 3, 4, 5]);
+      expect(result.currentVersion).toBe(5);
+      expect(getCurrentSchemaVersion(rawDb)).toBe(5);
 
       // Re-running migrations is idempotent
       const rerun = runMigrations(rawDb);
       expect(rerun.applied).toEqual([]);
-      expect(rerun.currentVersion).toBe(4);
+      expect(rerun.currentVersion).toBe(5);
     } finally {
       rawDb.close();
     }
@@ -44,7 +44,7 @@ describe("migrations", () => {
   it("initializes schema properly via AgentCorpDatabase", () => {
     const db = new AgentCorpDatabase(":memory:");
     try {
-      expect(db.getSchemaVersion()).toBe(4);
+      expect(db.getSchemaVersion()).toBe(5);
       expect(db.listAllTasks()).toEqual([]);
       expect(db.listAllMessages()).toEqual([]);
       expect(db.listAllApprovals()).toEqual([]);
@@ -67,8 +67,8 @@ describe("migrations", () => {
 
       // Run migrations; ensureMigrationTable must detect missing name column and alter it safely
       const result = runMigrations(rawDb);
-      expect(result.applied).toEqual([1, 2, 3, 4]);
-      expect(result.currentVersion).toBe(4);
+      expect(result.applied).toEqual([1, 2, 3, 4, 5]);
+      expect(result.currentVersion).toBe(5);
 
       const cols = rawDb.prepare("PRAGMA table_info(schema_migrations)").all() as Array<{ name: string }>;
       expect(cols.some((c) => c.name === "name")).toBe(true);
@@ -142,6 +142,30 @@ describe("migrations", () => {
 
       const indexes = rawDb.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>;
       expect(indexes.map((i) => i.name)).toContain("idx_maintenance_log_created_at");
+    } finally {
+      rawDb.close();
+    }
+  });
+
+  it("migration 5 creates auto-approve policy for review submission (AC-BND-R2-07)", () => {
+    const rawDb = new DatabaseSync(":memory:");
+    try {
+      MIGRATIONS[0]!.up(rawDb);
+      MIGRATIONS[1]!.up(rawDb);
+      MIGRATIONS[2]!.up(rawDb);
+      MIGRATIONS[3]!.up(rawDb);
+      MIGRATIONS[4]!.up(rawDb);
+
+      const policy = rawDb.prepare(
+        "SELECT * FROM policies WHERE policy_id = 'auto-approve-review-submission'",
+      ).get() as Record<string, unknown> | undefined;
+
+      expect(policy).toBeDefined();
+      expect(policy?.subject).toBe("task");
+      expect(policy?.from_status).toBe("in_progress");
+      expect(policy?.to_status).toBe("awaiting_review");
+      expect(policy?.action).toBe("auto_approve");
+      expect(policy?.priority).toBe(150);
     } finally {
       rawDb.close();
     }

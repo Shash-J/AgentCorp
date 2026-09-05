@@ -159,7 +159,10 @@ async function resolveDaemonInfo(
 
 function openBroker(options: GlobalOptions): { broker: AgentCorpBroker; db: AgentCorpDatabase } {
   const config = loadOrgConfig(options.config);
-  const db = new AgentCorpDatabase(options.db);
+  const db = new AgentCorpDatabase(options.db, {
+    ...(config.limits?.default_page_size !== undefined ? { defaultPageSize: config.limits.default_page_size } : {}),
+    ...(config.limits?.max_page_size !== undefined ? { maxPageSize: config.limits.max_page_size } : {}),
+  });
   return { broker: new AgentCorpBroker(config, db), db };
 }
 

@@ -161,6 +161,20 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 5,
+    name: "add_submission_auto_approve_policy",
+    up: (db: DatabaseSync) => {
+      const now = new Date().toISOString();
+      db.prepare(`
+        INSERT OR IGNORE INTO policies (
+          policy_id, subject, priority, from_status, to_status, action, enabled, created_at, updated_at
+        ) VALUES (
+          'auto-approve-review-submission', 'task', 150, 'in_progress', 'awaiting_review', 'auto_approve', 1, ?, ?
+        )
+      `).run(now, now);
+    },
+  },
 ];
 
 export function ensureMigrationTable(db: DatabaseSync): void {

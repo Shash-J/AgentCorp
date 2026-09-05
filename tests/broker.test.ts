@@ -149,12 +149,16 @@ describe("AgentCorpBroker", () => {
     expect(started.pendingApproval).toBe(false);
 
     const review = instance.updateTaskStatus("developer", task.taskId, "awaiting_review");
-    expect(review.pendingApproval).toBe(true);
-    expect(review.task.status).toBe("in_progress");
+    expect(review.pendingApproval).toBe(false);
+    expect(review.task.status).toBe("awaiting_review");
+
+    const completed = instance.updateTaskStatus("developer", task.taskId, "completed");
+    expect(completed.pendingApproval).toBe(true);
+    expect(completed.task.status).toBe("awaiting_review");
 
     const [approval] = instance.listPendingApprovals();
     instance.approve(approval!.approvalId);
-    expect(instance.listTasks("developer")[0]?.status).toBe("awaiting_review");
+    expect(instance.listTasks("developer")[0]?.status).toBe("completed");
   });
 
   it("does not allow a connection to escalate configured capabilities", () => {

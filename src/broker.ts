@@ -125,11 +125,12 @@ export class AgentCorpBroker extends EventEmitter {
   }
 
   private seedPolicies(): void {
-    if (this.database.countPolicies() > 0) return;
     const timestamp = this.timestamp();
     this.database.transaction(() => {
       for (const initial of this.config.policies) {
-        const rule = policyFromConfig(initial, initial.id ?? this.id("pol"), timestamp);
+        const id = initial.id ?? this.id("pol");
+        if (this.database.getPolicy(id)) continue;
+        const rule = policyFromConfig(initial, id, timestamp);
         if (rule.action === "delegate_to_role") {
           throw new AgentCorpError(
             "UNSUPPORTED_POLICY",
@@ -555,6 +556,28 @@ export class AgentCorpBroker extends EventEmitter {
     return artifact;
   }
 
+  private hasRemainingVisibleArtifact(
+    callerRole: string,
+    taskId: string | null,
+    afterTime: string,
+    afterId: string,
+  ): boolean {
+    let cursor: string | undefined = encodeCursor(afterTime, afterId);
+    while (cursor) {
+      const page = this.database.listArtifactsPaginated(taskId, {
+        limit: 50,
+        cursor,
+      });
+      for (const art of page.items) {
+        if (this.canSeeArtifact(art, callerRole)) {
+          return true;
+        }
+      }
+      cursor = page.nextCursor ?? undefined;
+    }
+    return false;
+  }
+
   listArtifactsPaginated(
     callerRole: string,
     taskIdOrOptions?: string | PaginationOptions,
@@ -577,7 +600,7 @@ export class AgentCorpBroker extends EventEmitter {
       invariant(task, "TASK_NOT_FOUND", `Task not found: ${taskId}`);
       this.assertTaskParticipant(task, callerRole);
     }
-    const targetLimit = parseLimit(options?.limit);
+    const targetLimit = this.database.resolveLimit(options?.limit);
     const collected: ArtifactRecord[] = [];
     let currentCursor = options?.cursor;
     let nextCursor: string | null = null;
@@ -592,25 +615,39 @@ export class AgentCorpBroker extends EventEmitter {
         nextCursor = null;
         break;
       }
-      for (const artifact of pageResult.items) {
+      for (let i = 0; i < pageResult.items.length; i++) {
+        const artifact = pageResult.items[i]!;
         if (this.canSeeArtifact(artifact, callerRole)) {
           collected.push(artifact);
           if (collected.length === targetLimit) {
-            nextCursor = encodeCursor(artifact.createdAt, artifact.artifactId);
+            // Check if any visible artifact remains after this item
+            const remainingInBatch = pageResult.items.slice(i + 1);
+            const hasVisibleInBatch = remainingInBatch.some((a) => this.canSeeArtifact(a, callerRole));
+            if (hasVisibleInBatch) {
+              nextCursor = encodeCursor(artifact.createdAt, artifact.artifactId);
+            } else if (pageResult.nextCursor) {
+              const hasMoreVisible = this.hasRemainingVisibleArtifact(
+                callerRole,
+                taskId,
+                artifact.createdAt,
+                artifact.artifactId,
+              );
+              nextCursor = hasMoreVisible ? encodeCursor(artifact.createdAt, artifact.artifactId) : null;
+            } else {
+              nextCursor = null;
+            }
             break;
           }
         }
       }
+      if (collected.length === targetLimit) {
+        break;
+      }
       if (!pageResult.nextCursor) {
-        if (collected.length < targetLimit) {
-          nextCursor = null;
-        }
+        nextCursor = null;
         break;
       }
       currentCursor = pageResult.nextCursor;
-      if (!nextCursor) {
-        nextCursor = pageResult.nextCursor;
-      }
     }
 
     return {

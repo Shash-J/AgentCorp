@@ -70,15 +70,28 @@ export const InitialPolicySchema = z.object({
 });
 export type InitialPolicy = z.infer<typeof InitialPolicySchema>;
 
-export const LimitsConfigSchema = z.object({
-  max_request_body_bytes: z.number().int().positive().optional(),
-  max_message_payload_bytes: z.number().int().positive().optional(),
-  max_artifact_bytes: z.number().int().positive().optional(),
-  max_payload_size_bytes: z.number().int().positive().optional(),
-  max_artifact_size_bytes: z.number().int().positive().optional(),
-  default_page_size: z.number().int().positive().optional(),
-  max_page_size: z.number().int().positive().optional(),
-});
+export const LimitsConfigSchema = z
+  .object({
+    max_request_body_bytes: z.number().int().positive().optional(),
+    max_message_payload_bytes: z.number().int().positive().optional(),
+    max_artifact_bytes: z.number().int().positive().optional(),
+    max_payload_size_bytes: z.number().int().positive().optional(),
+    max_artifact_size_bytes: z.number().int().positive().optional(),
+    default_page_size: z.number().int().positive().optional(),
+    max_page_size: z.number().int().positive().optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.default_page_size && data.max_page_size) {
+        return data.default_page_size <= data.max_page_size;
+      }
+      return true;
+    },
+    {
+      message: "default_page_size cannot be greater than max_page_size",
+      path: ["default_page_size"],
+    },
+  );
 export type LimitsConfig = z.infer<typeof LimitsConfigSchema>;
 
 export const OrgConfigSchema = z.object({
@@ -235,5 +248,9 @@ export interface AuditSnapshotMetadata {
   totalMessagesAvailable: number;
   totalApprovalsAvailable: number;
   totalArtifactsAvailable: number;
+  matchingTasksCount?: number | undefined;
+  matchingMessagesCount?: number | undefined;
+  matchingApprovalsCount?: number | undefined;
+  matchingArtifactsCount?: number | undefined;
   truncated: boolean;
 }

@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { AgentCorpBroker } from "./broker.js";
+import { DEFAULT_AUDIT_LIMIT, MAX_AUDIT_LIMIT, parseLimit } from "./database.js";
 import type {
   ArtifactRecord,
   AuditExportOptions,
@@ -49,26 +50,41 @@ export function generateAuditSnapshot(
   const totalApprovalsAvailable = db.countApprovals();
   const totalArtifactsAvailable = db.countArtifacts();
 
-  const tasks = db.getAuditTasks(options);
-  const messages = db.getAuditMessages(options);
-  const approvals = db.getAuditApprovals(options);
-  const artifacts = db.getAuditArtifacts(options);
+  const matchingTasksCount = db.countAuditTasks(options);
+  const matchingMessagesCount = db.countAuditMessages(options);
+  const matchingApprovalsCount = db.countAuditApprovals(options);
+  const matchingArtifactsCount = db.countAuditArtifacts(options);
 
-  const truncated = Boolean(options.limit !== undefined && options.limit > 0 && (
-    tasks.length < totalTasksAvailable ||
-    messages.length < totalMessagesAvailable ||
-    approvals.length < totalApprovalsAvailable ||
-    artifacts.length < totalArtifactsAvailable
-  ));
+  const effectiveLimit = parseLimit(options.limit, DEFAULT_AUDIT_LIMIT, MAX_AUDIT_LIMIT);
+  const exportOptions: AuditExportOptions = {
+    ...options,
+    limit: effectiveLimit,
+  };
+
+  const tasks = db.getAuditTasks(exportOptions);
+  const messages = db.getAuditMessages(exportOptions);
+  const approvals = db.getAuditApprovals(exportOptions);
+  const artifacts = db.getAuditArtifacts(exportOptions);
+
+  const truncated = Boolean(
+    tasks.length < matchingTasksCount ||
+    messages.length < matchingMessagesCount ||
+    approvals.length < matchingApprovalsCount ||
+    artifacts.length < matchingArtifactsCount
+  );
 
   const metadata: AuditSnapshotMetadata = {
     generatedAt: new Date().toISOString(),
     ...(options.since ? { since: options.since } : {}),
-    ...(options.limit !== undefined ? { limit: options.limit } : {}),
+    limit: effectiveLimit,
     totalTasksAvailable,
     totalMessagesAvailable,
     totalApprovalsAvailable,
     totalArtifactsAvailable,
+    matchingTasksCount,
+    matchingMessagesCount,
+    matchingApprovalsCount,
+    matchingArtifactsCount,
     truncated,
   };
 

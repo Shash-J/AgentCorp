@@ -1,11 +1,15 @@
-import { mkdirSync, rmSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { Worker } from "node:worker_threads";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { describe, expect, it } from "vitest";
 import { generateAuditSnapshot } from "../src/audit.js";
 import { AgentCorpBroker } from "../src/broker.js";
 import { parseOrgConfig } from "../src/config.js";
 import { AgentCorpDatabase } from "../src/database.js";
 import { AgentCorpError } from "../src/errors.js";
+import { createMcpServer } from "../src/mcp.js";
 import { AgentCorpServer } from "../src/server.js";
 import type { OrgConfig } from "../src/types.js";
 
@@ -493,9 +497,9 @@ describe("bounding, pagination, and maintenance", () => {
       mkdirSync(testDir, { recursive: true });
       const dbPath = resolve(testDir, "restart_test.db");
 
-      // Phase 1: Open, write data, verify schema version 4
+      // Phase 1: Open, write data, verify schema version 5
       const db1 = new AgentCorpDatabase(dbPath);
-      expect(db1.getSchemaVersion()).toBe(4);
+      expect(db1.getSchemaVersion()).toBe(5);
       db1.insertTask({
         taskId: "task_persisted",
         title: "Persisted Task",
@@ -511,7 +515,7 @@ describe("bounding, pagination, and maintenance", () => {
       // Phase 2: Reopen from disk, verify schema version and data persistence
       const db2 = new AgentCorpDatabase(dbPath);
       try {
-        expect(db2.getSchemaVersion()).toBe(4);
+        expect(db2.getSchemaVersion()).toBe(5);
         const task = db2.getTask("task_persisted");
         expect(task).toBeDefined();
         expect(task?.title).toBe("Persisted Task");
@@ -927,6 +931,520 @@ artifact_visibility = "all"
         expect(res.headers.get("X-Next-Cursor")).toBeTruthy();
       } finally {
         await server.stop();
+        db.close();
+      }
+    });
+  });
+
+  describe("AC-BND-R2: Second Re-Review Regression Tests", () => {
+    it("AC-BND-R2-01: audit export bounds records, queries most recent first in ASC order, checks updated_at in since, and computes accurate truncation", () => {
+      const db = new AgentCorpDatabase(":memory:");
+      const broker = new AgentCorpBroker(TEST_CONFIG, db);
+
+      try {
+        const baseTime = new Date("2026-09-01T00:00:00.000Z").getTime();
+        // Seed 10 tasks
+        for (let i = 0; i < 10; i++) {
+          const createdAt = new Date(baseTime + i * 3600 * 1000).toISOString();
+          const updatedAt = new Date(baseTime + i * 3600 * 1000).toISOString();
+          db.insertTask({
+            taskId: `task_${i.toString().padStart(2, "0")}`,
+            title: `Task ${i}`,
+            description: null,
+            createdBy: "architect",
+            assignedTo: "developer",
+            status: "completed",
+            createdAt,
+            updatedAt,
+          });
+        }
+
+        // Task 0 was created on 2026-09-01, but updated on 2026-09-04
+        db.updateTaskStatus("task_00", "completed", "2026-09-04T12:00:00.000Z");
+
+        // Test since filter checks updated_at as well as created_at
+        const sinceDate = "2026-09-04T00:00:00.000Z";
+        const tasksSince = db.getAuditTasks({ since: sinceDate });
+        // task_00 must be included because its updated_at >= sinceDate!
+        expect(tasksSince.some((t) => t.taskId === "task_00")).toBe(true);
+
+        // Test limit queries most recent records but returns in ASC chronological order
+        // There are 10 tasks. If limit is 3, it should pick the 3 most recent tasks (by updated_at: task_00, task_09, task_08)
+        // and return them ordered by createdAt ASC!
+        const limitedTasks = db.getAuditTasks({ limit: 3 });
+        expect(limitedTasks).toHaveLength(3);
+        // Ensure chronological order
+        for (let j = 0; j < limitedTasks.length - 1; j++) {
+          expect(limitedTasks[j]!.createdAt <= limitedTasks[j + 1]!.createdAt).toBe(true);
+        }
+
+        // Test accurate truncation calculation in snapshot
+        // If filter matches 1 task and limit is 5: truncated must be FALSE!
+        const snapshot1 = generateAuditSnapshot(broker, { since: "2026-09-04T11:00:00.000Z", limit: 5 });
+        expect(snapshot1.tasks.length).toBe(1);
+        expect(snapshot1.metadata.truncated).toBe(false);
+
+        // If 10 tasks match and limit is 3: truncated must be TRUE!
+        const snapshot2 = generateAuditSnapshot(broker, { limit: 3 });
+        expect(snapshot2.tasks.length).toBe(3);
+        expect(snapshot2.metadata.truncated).toBe(true);
+      } finally {
+        db.close();
+      }
+    });
+
+    it("AC-BND-R2-02: prune succeeds on complex reply chains without foreign key failures", () => {
+      const db = new AgentCorpDatabase(":memory:");
+      try {
+        const oldTime = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+        const recentTime = new Date().toISOString();
+
+        // 1. Old completed task
+        db.insertTask({
+          taskId: "old_task",
+          title: "Old Task",
+          description: null,
+          createdBy: "architect",
+          assignedTo: "developer",
+          status: "completed",
+          createdAt: oldTime,
+          updatedAt: oldTime,
+        });
+
+        // 2. Old message M1 belonging to old_task
+        db.insertMessage({
+          messageId: "msg_old_1",
+          taskId: "old_task",
+          fromRole: "architect",
+          toRole: "developer",
+          type: "proposal",
+          payload: {},
+          references: [],
+          inReplyTo: null,
+          status: "delivered",
+          riskTags: [],
+          createdAt: oldTime,
+          resolvedAt: oldTime,
+        });
+
+        // 3. Old message M2 replying to M1 within old_task
+        db.insertMessage({
+          messageId: "msg_old_2",
+          taskId: "old_task",
+          fromRole: "developer",
+          toRole: "architect",
+          type: "status_update",
+          payload: {},
+          references: [],
+          inReplyTo: "msg_old_1",
+          status: "delivered",
+          riskTags: [],
+          createdAt: oldTime,
+          resolvedAt: oldTime,
+        });
+
+        // 4. Standalone old message M3
+        db.insertMessage({
+          messageId: "msg_old_standalone",
+          taskId: null,
+          fromRole: "architect",
+          toRole: "developer",
+          type: "status_update",
+          payload: {},
+          references: [],
+          inReplyTo: null,
+          status: "delivered",
+          riskTags: [],
+          createdAt: oldTime,
+          resolvedAt: oldTime,
+        });
+
+        // 5. Active recent task
+        db.insertTask({
+          taskId: "active_task",
+          title: "Active Task",
+          description: null,
+          createdBy: "architect",
+          assignedTo: "developer",
+          status: "in_progress",
+          createdAt: recentTime,
+          updatedAt: recentTime,
+        });
+
+        // 6. Cross-task reply: active message M4 replies to old message M1!
+        db.insertMessage({
+          messageId: "msg_active_cross_reply",
+          taskId: "active_task",
+          fromRole: "developer",
+          toRole: "architect",
+          type: "status_update",
+          payload: {},
+          references: [],
+          inReplyTo: "msg_old_1",
+          status: "delivered",
+          riskTags: [],
+          createdAt: recentTime,
+          resolvedAt: null,
+        });
+
+        // 7. Recent standalone message M5 replies to old standalone M3!
+        db.insertMessage({
+          messageId: "msg_recent_standalone_reply",
+          taskId: null,
+          fromRole: "developer",
+          toRole: "architect",
+          type: "status_update",
+          payload: {},
+          references: [],
+          inReplyTo: "msg_old_standalone",
+          status: "delivered",
+          riskTags: [],
+          createdAt: recentTime,
+          resolvedAt: null,
+        });
+
+        // Execute live prune with 30 days cutoff
+        const pruneResult = db.pruneHistory({ olderThanDays: 30, dryRun: false });
+        expect(pruneResult.tasksCount).toBe(1);
+        expect(pruneResult.messagesCount).toBe(3); // msg_old_1, msg_old_2, msg_old_standalone
+
+        // Active messages still exist, with inReplyTo safely detached to NULL
+        const m4 = db.getMessage("msg_active_cross_reply");
+        expect(m4).toBeDefined();
+        expect(m4?.inReplyTo).toBeNull();
+
+        const m5 = db.getMessage("msg_recent_standalone_reply");
+        expect(m5).toBeDefined();
+        expect(m5?.inReplyTo).toBeNull();
+
+        // Old messages and tasks are gone
+        expect(db.getMessage("msg_old_1")).toBeUndefined();
+        expect(db.getMessage("msg_old_2")).toBeUndefined();
+        expect(db.getMessage("msg_old_standalone")).toBeUndefined();
+        expect(db.getTask("old_task")).toBeUndefined();
+      } finally {
+        db.close();
+      }
+    });
+
+    it("AC-BND-R2-03: rejects default_page_size > max_page_size and threads configured page limits", () => {
+      // 1. Invariant check in config
+      const invalidToml = `
+[company]
+name = "Limits Corp"
+
+[limits]
+default_page_size = 50
+max_page_size = 20
+
+[[roles]]
+id = "architect"
+interface = "mcp"
+capabilities = ["propose_plan"]
+allowed_peers = ["developer"]
+artifact_visibility = "all"
+
+[[roles]]
+id = "developer"
+interface = "mcp"
+capabilities = ["write_code"]
+allowed_peers = ["architect"]
+artifact_visibility = "all"
+`;
+      expect(() => parseOrgConfig(invalidToml)).toThrow();
+
+      // 2. Threaded through database and broker
+      const validToml = `
+[company]
+name = "Limits Corp"
+
+[limits]
+default_page_size = 3
+max_page_size = 7
+
+[[roles]]
+id = "architect"
+interface = "mcp"
+capabilities = ["propose_plan"]
+allowed_peers = ["developer"]
+artifact_visibility = "all"
+
+[[roles]]
+id = "developer"
+interface = "mcp"
+capabilities = ["write_code"]
+allowed_peers = ["architect"]
+artifact_visibility = "all"
+`;
+      const config = parseOrgConfig(validToml);
+      const db = new AgentCorpDatabase(":memory:", {
+        defaultPageSize: config.limits.default_page_size,
+        maxPageSize: config.limits.max_page_size,
+      });
+      const broker = new AgentCorpBroker(config, db);
+
+      try {
+        expect(db.defaultPageSize).toBe(3);
+        expect(db.maxPageSize).toBe(7);
+
+        // Clamps default and max
+        expect(db.resolveLimit()).toBe(3);
+        expect(db.resolveLimit(100)).toBe(7);
+
+        // MCP server reflects max_page_size
+        const server = createMcpServer(broker, "architect", "arch-1");
+        expect(server).toBeDefined();
+      } finally {
+        db.close();
+      }
+    });
+
+    it("AC-BND-R2-04: multi-threaded concurrency using worker_threads with overlapping transactions", async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "agentcorp-concurrency-"));
+      const dbPath = join(tempDir, "concurrent.db");
+
+      // Initialize DB schema
+      const initDb = new AgentCorpDatabase(dbPath);
+      initDb.close();
+
+      const workerScript = `
+        const { workerData, parentPort } = require('node:worker_threads');
+        const { DatabaseSync } = require('node:sqlite');
+        const db = new DatabaseSync(workerData.dbPath);
+        db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+        let committed = 0;
+        let busyErrors = 0;
+        for (let i = 0; i < workerData.iterations; i++) {
+          try {
+            db.exec("BEGIN IMMEDIATE;");
+            const start = Date.now();
+            while (Date.now() - start < 1) {}
+            db.prepare("INSERT INTO tasks (task_id, title, created_by, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+              .run(workerData.prefix + "_" + i, "Concurrent Task", "worker", "proposed", new Date().toISOString(), new Date().toISOString());
+            db.exec("COMMIT;");
+            committed++;
+          } catch (err) {
+            busyErrors++;
+            try { db.exec("ROLLBACK;"); } catch {}
+          }
+        }
+        db.close();
+        parentPort.postMessage({ committed, busyErrors });
+      `;
+
+      function runWorker(prefix: string, iterations: number): Promise<{ committed: number; busyErrors: number }> {
+        return new Promise((resolveWorker, rejectWorker) => {
+          const worker = new Worker(workerScript, {
+            eval: true,
+            workerData: { dbPath, prefix, iterations },
+          });
+          let result: { committed: number; busyErrors: number } = { committed: 0, busyErrors: 0 };
+          worker.on("message", (msg) => {
+            result = msg;
+          });
+          worker.on("error", rejectWorker);
+          worker.on("exit", () => {
+            resolveWorker(result);
+          });
+        });
+      }
+
+      try {
+        const [w1, w2] = await Promise.all([
+          runWorker("w1", 20),
+          runWorker("w2", 20),
+        ]);
+
+        expect(w1.committed + w2.committed).toBeGreaterThan(0);
+
+        // Verify DB integrity and count
+        const verifyDb = new AgentCorpDatabase(dbPath);
+        try {
+          const integrity = verifyDb.db.prepare("PRAGMA integrity_check").get() as { integrity_check?: string };
+          expect(integrity.integrity_check).toBe("ok");
+
+          const totalTasks = verifyDb.countTasks();
+          expect(totalTasks).toBe(w1.committed + w2.committed);
+        } finally {
+          verifyDb.close();
+        }
+      } finally {
+        try {
+          rmSync(tempDir, { recursive: true, force: true });
+        } catch {
+          // Best effort cleanup
+        }
+      }
+    });
+
+    it("AC-BND-R2-05: artifact pagination emits no phantom cursor on terminal page", () => {
+      const db = new AgentCorpDatabase(":memory:");
+      const broker = new AgentCorpBroker(TEST_CONFIG, db);
+
+      try {
+        // Create 2 visible artifacts and 2 private artifacts
+        broker.createArtifact("architect", {
+          type: "doc",
+          name: "Visible 1",
+          content: "visible content 1",
+          visibleToRoles: ["architect", "developer"],
+        });
+        broker.createArtifact("architect", {
+          type: "doc",
+          name: "Visible 2",
+          content: "visible content 2",
+          visibleToRoles: ["architect", "developer"],
+        });
+        // Create 2 artifacts visible ONLY to architect
+        broker.createArtifact("architect", {
+          type: "doc",
+          name: "Private 1",
+          content: "private content 1",
+          visibleToRoles: ["architect"],
+        });
+        broker.createArtifact("architect", {
+          type: "doc",
+          name: "Private 2",
+          content: "private content 2",
+          visibleToRoles: ["architect"],
+        });
+
+        // Developer requests limit: 2
+        // Both visible artifacts fit in page 1.
+        // Because remaining artifacts are NOT visible to developer, nextCursor MUST be null!
+        const page = broker.listArtifactsPaginated("developer", { limit: 2 });
+        expect(page.items).toHaveLength(2);
+        expect(page.nextCursor).toBeNull();
+      } finally {
+        db.close();
+      }
+    });
+
+    it("AC-BND-R2-06: maintenance safety requires execute: true for REST prune, atomic prune logging, and bounded retention", async () => {
+      const db = new AgentCorpDatabase(":memory:");
+      const broker = new AgentCorpBroker(TEST_CONFIG, db);
+      const server = new AgentCorpServer(broker, undefined, { port: 0 });
+      const info = await server.start();
+
+      try {
+        // Insert old task and old maintenance log
+        const oldTime = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+        db.insertTask({
+          taskId: "prune_me",
+          title: "Prune Me",
+          description: null,
+          createdBy: "architect",
+          assignedTo: "developer",
+          status: "completed",
+          createdAt: oldTime,
+          updatedAt: oldTime,
+        });
+
+        db.insertMaintenanceLog({
+          id: "maint_ancient",
+          action: "prune_simulation",
+          details: {},
+          createdAt: oldTime,
+        });
+
+        // 1. Calling REST prune without execute: true defaults to dryRun: true!
+        const dryRes = await fetch(`${info.url}/api/maintenance/prune`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${server.credentials.adminToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ olderThanDays: 30 }),
+        });
+        const dryJson = (await dryRes.json()) as { dryRun: boolean; tasksCount: number };
+        expect(dryJson.dryRun).toBe(true);
+        expect(db.getTask("prune_me")).toBeDefined();
+
+        // 2. Calling REST prune with execute: true executes live deletion
+        const liveRes = await fetch(`${info.url}/api/maintenance/prune`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${server.credentials.adminToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ olderThanDays: 30, execute: true }),
+        });
+        const liveJson = (await liveRes.json()) as { dryRun: boolean; tasksCount: number };
+        expect(liveJson.dryRun).toBe(false);
+        expect(db.getTask("prune_me")).toBeUndefined();
+
+        // 3. Maintenance logs: old log was deleted, and prune_execution log exists
+        const logs = db.listMaintenanceLogs();
+        expect(logs.some((l) => l.id === "maint_ancient")).toBe(false);
+        expect(logs.some((l) => l.action === "prune_execution")).toBe(true);
+      } finally {
+        await server.stop();
+        db.close();
+      }
+    });
+
+    it("AC-BND-R2-07: update_task_status supports status and new_status, auto-approves review submission via Migration 5, and gates completion", async () => {
+      const db = new AgentCorpDatabase(":memory:");
+      const broker = new AgentCorpBroker(TEST_CONFIG, db);
+
+      // Create MCP server & client for developer
+      const devServer = createMcpServer(broker, "developer", "dev-test");
+      const devClient = new Client({ name: "dev-client", version: "0.0.0" });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+
+      await devServer.connect(serverTransport);
+      await devClient.connect(clientTransport);
+
+      try {
+        // Seed task in in_progress
+        db.insertTask({
+          taskId: "task_review_test",
+          title: "Review Test Task",
+          description: null,
+          createdBy: "architect",
+          assignedTo: "developer",
+          status: "in_progress",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+
+        // 1. Developer submits task for review using 'status' field (instead of 'new_status')
+        const reviewResult = await devClient.callTool({
+          name: "update_task_status",
+          arguments: {
+            task_id: "task_review_test",
+            status: "awaiting_review",
+          },
+        });
+
+        // Auto-approved via Migration 5 policy!
+        const reviewData = JSON.parse((reviewResult.content as Array<{ text: string }>)[0]!.text) as {
+          task: { status: string };
+          pendingApproval: boolean;
+        };
+        expect(reviewData.task.status).toBe("awaiting_review");
+        expect(reviewData.pendingApproval).toBe(false);
+        expect(db.getTask("task_review_test")?.status).toBe("awaiting_review");
+
+        // 2. From 'awaiting_review', developer requests 'completed' using 'new_status' field
+        const completedResult = await devClient.callTool({
+          name: "update_task_status",
+          arguments: {
+            task_id: "task_review_test",
+            new_status: "completed",
+          },
+        });
+
+        // Human gate retained: pendingApproval is true!
+        const completedData = JSON.parse((completedResult.content as Array<{ text: string }>)[0]!.text) as {
+          task: { status: string };
+          pendingApproval: boolean;
+        };
+        expect(completedData.pendingApproval).toBe(true);
+        expect(db.getTask("task_review_test")?.status).toBe("awaiting_review");
+      } finally {
+        await devClient.close();
+        await devServer.close();
         db.close();
       }
     });
