@@ -28,18 +28,20 @@ npm --version
 The Node version must be `v22.13.0` or newer.
 
 ## 2. Install AgentCorp
- 
+
 Install globally via npm:
- 
+
 ```sh
-npm install --global agentcorp-broker
+npm install --global agentcorp-broker@alpha
 agentcorp --version
 ```
 
 Or run directly with zero installation:
 ```sh
-npx agentcorp-broker init
+npx agentcorp-broker@alpha init
 ```
+
+> **Note**: While AgentCorp is in developer preview, specifying the `@alpha` tag ensures you target the preview stream.
 
 If you prefer building from source:
 ```sh

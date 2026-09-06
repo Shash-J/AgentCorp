@@ -5,15 +5,15 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
 [![Node.js: >=22.13.0](https://img.shields.io/badge/node-%3E%3D22.13.0-brightgreen.svg)](https://nodejs.org/)
 
-AgentCorp lets multiple AI assistants (like Claude, Cursor, Codex, or Gemini) collaborate on your codebase. It assigns stable roles, coordinates task handoffs, and pauses sensitive actions for human approval—storing everything locally in SQLite without locking you into a single AI model or vendor.
+AgentCorp gives MCP-capable AI assistants (such as Claude, Cursor, Codex, or Gemini) stable roles, typed messages, durable tasks, and human approval gates—storing coordination state locally in SQLite without coupling agents to a single model or vendor.
 
 ---
 
 ### ✨ Why AgentCorp?
 - **Multi-Agent Collaboration**: Have an "Architect" agent design features while a "Developer" agent implements the code.
-- **Human in the Loop**: Sensitive actions (file mutations, task completions, cross-role messages) pause for your sign-off in a terminal review or local web dashboard.
-- **Local-First & Private**: Built on Node.js and SQLite. Your code, task history, and conversations never leave your machine.
-- **Works with Your Existing Tools**: Connects natively to Claude Desktop, Cursor, Antigravity, and any Model Context Protocol (MCP) host.
+- **Human in the Loop**: Policy-matched coordination messages, task proposals, and handoffs pause for human sign-off in a terminal review or local web dashboard.
+- **Local-First Coordination**: Built on Node.js and SQLite. AgentCorp's broker, message logs, credentials, and artifact metadata reside locally on your machine, eliminating third-party coordination servers.
+- **MCP Integration**: Can be configured with MCP-capable agent environments, with tested and documented setups for Claude Desktop, Cursor, and Codex.
 
 ---
 
@@ -21,24 +21,29 @@ AgentCorp lets multiple AI assistants (like Claude, Cursor, Codex, or Gemini) co
 
 ---
 
-### ⚡ Quick Start (60 Seconds)
+### ⚡ Quick Start: Start the Local Broker
 
 #### 1. Install Globally (Node.js >= 22.13 required)
 ```bash
-npm install --global agentcorp-broker
+npm install --global agentcorp-broker@alpha
 ```
-*(Or run directly without installing: `npx agentcorp-broker init`)*
+*(Or run without installing: `npx agentcorp-broker@alpha init`)*
 
-#### 2. Initialize in Any Project
-Open a terminal in any codebase where you want agents to work:
+> **Note**: While AgentCorp is in developer preview, specifying the `@alpha` tag explicitly targets the preview stream.
+
+#### 2. Initialize and Start the Broker Daemon
+Open a terminal in any codebase where you want agents to coordinate:
 ```bash
 cd /path/to/your-project
 agentcorp init
-agentcorp start
+agentcorp validate
+agentcorp start --daemon
 ```
 `agentcorp init` automatically creates:
 - `org.toml`: Defines your agent roles (e.g. `architect` and `developer`) and approval rules.
 - `.agentcorp/`: Local private SQLite database and credentials.
+
+Starting with `--daemon` runs the broker in the background so your terminal remains free.
 
 #### 3. Oversee and Approve Actions
 ```bash
@@ -48,6 +53,8 @@ agentcorp console --browser
 # Or review pending agent approvals directly in your terminal:
 agentcorp review
 ```
+
+To connect your AI agents (e.g., Claude or Cursor) to the running broker, see [Connect agents over MCP](#connect-agents-over-mcp) below.
 
 ---
 
@@ -86,12 +93,13 @@ New to Node.js, terminals, or MCP? Check out our complete [beginner setup guide]
 
 ### Install via npm (Recommended)
 ```sh
-npm install --global agentcorp-broker
+npm install --global agentcorp-broker@alpha
 ```
 Confirm the installation:
 ```sh
 agentcorp --version
 ```
+> The `@alpha` tag targets the developer preview stream during early releases.
 
 ### Or run from source for local development
 ```sh
