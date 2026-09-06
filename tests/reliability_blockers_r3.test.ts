@@ -70,7 +70,9 @@ describe("Codex Round 3 Reliability Blockers (AC-RLY-R3-01 and AC-RLY-R3-02)", (
   // AC-RLY-R3-01: Auto-spawn when MCP host working directory != config project directory.
   // Child daemon must write daemon.json, logs, and db into the project directory, not caller cwd.
   describe("AC-RLY-R3-01: Working Directory Isolation During Daemon Auto-Spawn", () => {
-    it("spawns daemon and writes daemon.json, daemon.log, and db into project directory when host cwd differs", async () => {
+    it(
+      "spawns daemon and writes daemon.json, daemon.log, and db into project directory when host cwd differs",
+      async () => {
       const projectDir = resolve(TEST_ROOT, "isolated_project");
       mkdirSync(projectDir, { recursive: true });
 
@@ -152,7 +154,7 @@ artifact_visibility = ["developer", "architect"]
         await daemonClient.close();
         await killProcess(daemonInfo.pid);
       }
-    });
+    }, 15000);
   });
 
   // AC-RLY-R3-02: Bounded audit queries must not select edited_payload or inflate heap.

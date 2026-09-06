@@ -10,7 +10,7 @@ Only the latest published preview version receives security fixes before 1.0.
 ## Reporting a vulnerability
 
 Please report vulnerabilities privately through GitHub Security Advisories at
-[https://github.com/agentcorp/agentcorp/security/advisories](https://github.com/agentcorp/agentcorp/security/advisories).
+[https://github.com/Shash-J/AgentCorp/security/advisories](https://github.com/Shash-J/AgentCorp/security/advisories).
 Do not open a public issue containing exploit details. Include affected versions,
 reproduction steps, impact, and any known mitigation.
 

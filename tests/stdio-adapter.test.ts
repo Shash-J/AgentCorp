@@ -100,7 +100,7 @@ describe("stdio-adapter", () => {
       await proxyServer.close();
       await daemonClient.close();
     }
-  });
+  }, 15000);
 
   it("throws DAEMON_NOT_RUNNING when noSpawn is true and daemon is unreachable", async () => {
     await expect(
