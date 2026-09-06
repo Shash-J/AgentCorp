@@ -12,16 +12,22 @@ describe("Package Release Smoke Test: Clean Outside-Checkout Installation", () =
 
   const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
   const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
+  const npmExecutionEnv = { ...process.env };
+  delete npmExecutionEnv.npm_config_dry_run;
+  delete npmExecutionEnv.NPM_CONFIG_DRY_RUN;
 
   beforeAll(() => {
     // 1. Create temporary directory to hold packed tarball
     tempWorkDir = mkdtempSync(join(tmpdir(), "agentcorp-smoke-pack-"));
     cleanClientDir = mkdtempSync(join(tmpdir(), "agentcorp-smoke-client-"));
 
-    // 2. Build and pack the project into tempWorkDir
+    // 2. Build and pack the project into tempWorkDir. npm publish --dry-run
+    // propagates npm_config_dry_run=true into lifecycle scripts; remove it so
+    // this nested smoke-test pack produces the tarball it must install.
     const packOutput = execSync(`${npmCmd} pack --json --ignore-scripts --pack-destination "${tempWorkDir}"`, {
       cwd: resolve("."),
       encoding: "utf8",
+      env: npmExecutionEnv,
     });
     const packed = JSON.parse(packOutput) as Array<{
       filename: string;
@@ -70,18 +76,21 @@ describe("Package Release Smoke Test: Clean Outside-Checkout Installation", () =
     execSync(`${npmCmd} init -y`, {
       cwd: cleanClientDir,
       stdio: "pipe",
+      env: npmExecutionEnv,
     });
 
     // 2. Install the packed tarball
     execSync(`${npmCmd} install "${tarballPath}"`, {
       cwd: cleanClientDir,
       stdio: "pipe",
+      env: npmExecutionEnv,
     });
 
     // 3. Test agentcorp --version
     const versionOutput = execSync(`${npxCmd} agentcorp --version`, {
       cwd: cleanClientDir,
       encoding: "utf8",
+      env: npmExecutionEnv,
     }).trim();
     expect(versionOutput).toBe("0.1.0-alpha.1");
 
@@ -89,6 +98,7 @@ describe("Package Release Smoke Test: Clean Outside-Checkout Installation", () =
     const helpOutput = execSync(`${npxCmd} agentcorp --help`, {
       cwd: cleanClientDir,
       encoding: "utf8",
+      env: npmExecutionEnv,
     });
     expect(helpOutput).toContain("Usage: agentcorp [options] [command]");
     expect(helpOutput).toContain("init");
@@ -99,6 +109,7 @@ describe("Package Release Smoke Test: Clean Outside-Checkout Installation", () =
     const initOutput = execSync(`${npxCmd} agentcorp init`, {
       cwd: cleanClientDir,
       encoding: "utf8",
+      env: npmExecutionEnv,
     });
     expect(initOutput).toContain('"created":');
     expect(initOutput).toContain('"roles":');
@@ -109,6 +120,7 @@ describe("Package Release Smoke Test: Clean Outside-Checkout Installation", () =
     const validateOutput = execSync(`${npxCmd} agentcorp validate`, {
       cwd: cleanClientDir,
       encoding: "utf8",
+      env: npmExecutionEnv,
     });
     expect(validateOutput).toContain('"valid": true');
     expect(validateOutput).toContain('"company": "My Agent Company"');
