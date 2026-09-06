@@ -1,15 +1,55 @@
-# AgentCorp
+# AgentCorp 🏢
+> **Local-first coordination broker for teams of AI agents with human-in-the-loop oversight.**
 
-AgentCorp is a local-first coordination broker for teams of AI agents. It gives
-MCP-capable agents stable roles, typed messages, durable tasks, approval gates,
-and access-controlled artifacts without coupling the agents to one vendor or
-model.
+[![npm version](https://img.shields.io/npm/v/agentcorp-broker?color=cb3837&label=npm)](https://www.npmjs.com/package/agentcorp-broker)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
+[![Node.js: >=22.13.0](https://img.shields.io/badge/node-%3E%3D22.13.0-brightgreen.svg)](https://nodejs.org/)
 
-> Status: **developer preview (0.1.0-alpha.1)**.
-> Central long-lived broker daemon, terminal-native human console & review loop,
-> real-time SSE event pipeline with 15s keep-alive heartbeat, dark glassmorphic web dashboard, and audit exports.
+AgentCorp lets multiple AI assistants (like Claude, Cursor, Codex, or Gemini) collaborate on your codebase. It assigns stable roles, coordinates task handoffs, and pauses sensitive actions for human approval—storing everything locally in SQLite without locking you into a single AI model or vendor.
+
+---
+
+### ✨ Why AgentCorp?
+- **Multi-Agent Collaboration**: Have an "Architect" agent design features while a "Developer" agent implements the code.
+- **Human in the Loop**: Sensitive actions (file mutations, task completions, cross-role messages) pause for your sign-off in a terminal review or local web dashboard.
+- **Local-First & Private**: Built on Node.js and SQLite. Your code, task history, and conversations never leave your machine.
+- **Works with Your Existing Tools**: Connects natively to Claude Desktop, Cursor, Antigravity, and any Model Context Protocol (MCP) host.
+
+---
 
 ![AgentCorp Architecture Blueprint](./docs/images/architecture.jpg)
+
+---
+
+### ⚡ Quick Start (60 Seconds)
+
+#### 1. Install Globally (Node.js >= 22.13 required)
+```bash
+npm install --global agentcorp-broker
+```
+*(Or run directly without installing: `npx agentcorp-broker init`)*
+
+#### 2. Initialize in Any Project
+Open a terminal in any codebase where you want agents to work:
+```bash
+cd /path/to/your-project
+agentcorp init
+agentcorp start
+```
+`agentcorp init` automatically creates:
+- `org.toml`: Defines your agent roles (e.g. `architect` and `developer`) and approval rules.
+- `.agentcorp/`: Local private SQLite database and credentials.
+
+#### 3. Oversee and Approve Actions
+```bash
+# Launch the live web dashboard in your browser:
+agentcorp console --browser
+
+# Or review pending agent approvals directly in your terminal:
+agentcorp review
+```
+
+---
 
 ## What works today
 
@@ -40,33 +80,26 @@ AgentCorp uses Node's built-in `node:sqlite` module to avoid native npm
 dependencies. On Node 22 it may print an experimental-feature warning; it does
 not require an experimental flag from 22.13 onward.
 
-## Quick start
+## Installation & Setup
 
-New to Node.js, terminals, or MCP? Follow the complete
-[beginner setup guide](./docs/getting-started.md). The short path is below.
+New to Node.js, terminals, or MCP? Check out our complete [beginner setup guide](./docs/getting-started.md).
 
-Until the first npm release, run the CLI from this repository:
-
-```sh
-npm install
-npm run build
-node dist/cli.js init
-node dist/cli.js validate
-node dist/cli.js start
-```
-
-After publication:
-
+### Install via npm (Recommended)
 ```sh
 npm install --global agentcorp-broker
-agentcorp init
-agentcorp validate
-agentcorp start
+```
+Confirm the installation:
+```sh
+agentcorp --version
 ```
 
-`agentcorp init` creates an architect/developer organization with conservative
-approval defaults and generates local credentials under `.agentcorp/credentials.json`.
-Runtime state under `.agentcorp/` should not be committed.
+### Or run from source for local development
+```sh
+git clone https://github.com/Shash-J/AgentCorp.git
+cd AgentCorp
+npm install
+npm run build
+```
 
 ## Connect agents over MCP
 

@@ -28,27 +28,26 @@ npm --version
 The Node version must be `v22.13.0` or newer.
 
 ## 2. Install AgentCorp
-
-Before the first npm publication, clone the repository and build it:
-
+ 
+Install globally via npm:
+ 
 ```sh
-git clone <AGENTCORP_REPOSITORY_URL>
+npm install --global agentcorp-broker
+agentcorp --version
+```
+
+Or run directly with zero installation:
+```sh
+npx agentcorp-broker init
+```
+
+If you prefer building from source:
+```sh
+git clone https://github.com/Shash-J/AgentCorp.git
 cd AgentCorp
 npm install
 npm run build
 ```
-
-Use `node /absolute/path/to/AgentCorp/dist/cli.js` wherever the examples below
-say `agentcorp`.
-
-After the package is published, install it globally instead:
-
-```sh
-npm install --global agentcorp-broker@alpha
-agentcorp --version
-```
-
-The `alpha` tag is intentional while AgentCorp is a developer preview.
 
 ## 3. Initialize AgentCorp in your project
 
